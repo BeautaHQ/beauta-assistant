@@ -1,0 +1,1864 @@
+// GENERATED COPY — do not edit here.
+//
+// Source of truth: beauta-api/prisma/schema.prisma. Refresh with
+// `npm run prisma:sync`, which copies it and regenerates the client.
+// beauta-api owns every migration; there is deliberately no migrate script.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RecurringType {
+  NONE
+  DAILY
+  WEEKLY
+}
+
+enum NotificationEventType {
+  REMINDER
+  CONFIRMATION
+  RESCHEDULE_NOTICE
+  CANCELLATION_NOTICE
+  NO_SHOW_NOTICE
+}
+
+enum NotificationChannel {
+  SMS
+  EMAIL
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum BookingEventType {
+  CREATED
+  RESCHEDULED
+  CANCELED
+  COMPLETED
+  REMINDER_SENT
+  NO_SHOW
+}
+
+enum EventActorType {
+  ADMIN
+  STAFF
+  CUSTOMER
+  SYSTEM
+}
+
+enum PortfolioCategory {
+  NAIL
+  HAIR
+  TATTOO
+  MASSAGE
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  CANCELED
+  EXPIRED
+  REFUNDED
+  REFUNDING
+}
+
+enum BookingStaffSelectionMode {
+  RANDOM_ONLY
+  SPECIFIC_ONLY
+  BOTH
+}
+
+enum BookingPaymentMode {
+  PAY_IN_STORE_ONLY
+  PAY_NOW_ONLY
+  BOTH
+}
+
+enum BookingPaymentStatus {
+  PENDING
+  UNPAID
+  PAID
+  REFUNDED
+  PARTIALLY_PAID
+  OVERPAID
+  REFUNDING
+}
+
+enum BookingPaymentType {
+  ONLINE
+  IN_PERSON
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  TRIALING
+  PAST_DUE
+  CANCELED
+}
+
+enum ExportType {
+  CUSTOMER
+  BOOKING
+  SERVICE
+  ADDON
+  STAFF
+}
+
+enum ExportStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum PointTransactionType {
+  ADD
+  DEDUCT
+}
+
+enum CustomerPointRedemptionStatus {
+  ACTIVE
+  REFUNDED
+}
+
+enum FeedbackMode {
+  ANONYMOUS
+  REAL
+}
+
+enum BookingImageKind {
+  BEFORE
+  AFTER
+}
+
+// Lifecycle of a customer-reported issue. Kept intentionally small: a new issue
+// is OPEN, staff move it to IN_PROGRESS when they pick it up, and RESOLVED when
+// handled. No reopen state — the customer would file a fresh issue instead.
+enum IssueStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+}
+
+enum CommissionStatus {
+  PENDING
+  PAID
+  CANCELLED
+}
+
+enum CommissionItemType {
+  SERVICE
+  ADDON
+}
+
+enum DailyJobType {
+  SNAPSHOT
+  COMMISSION
+}
+
+// What a salon is asking our team to do for them.
+enum UserRequestType {
+  ACCOUNT_SETUP
+  DATA_MIGRATION
+  DATA_EXPORT
+}
+
+// Where our team is up to on that request. The salon only ever submits; every
+// move through this is ours.
+enum UserRequestStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+}
+
+// A marketing blast's lifecycle.
+//
+// SENDING is a lock, not a state anyone is meant to watch: it is held only
+// while the batches are being handed to Mailjet, and the campaign closes as
+// SENT or FAILED as soon as that finishes. Claiming it is what stops a
+// double-clicked Send from starting two runs over the same recipients.
+enum MarketingCampaignStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  FAILED
+  CANCELED
+}
+
+// What a template is for. Drives the grouping in the template picker, so the
+// salon scans a short list under "Birthday" instead of one long flat list.
+enum MarketingTemplateCategory {
+  BIRTHDAY
+  PROMOTION
+  SEASONAL
+  ANNOUNCEMENT
+  OTHER
+}
+
+// Per-recipient outcome, as far as the send call can tell.
+//
+// SENT means Mailjet accepted the message, which is all we know without an
+// event webhook — there is deliberately no BOUNCED or OPENED here, because
+// nothing in the system could ever set them. Add them back alongside the
+// webhook that feeds them, not before.
+enum MarketingRecipientStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model User {
+  id            Int    @id @default(autoincrement())
+  email         String @unique
+  cognitoAuthId String @unique @map("cognito_auth_id")
+
+  roleId Int?  @map("role_id")
+  role   Role? @relation(fields: [roleId], references: [id])
+
+  organizationId Int?          @map("organization_id")
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  userRequests UserRequest[]
+  sessions     UserSession[]
+
+  @@map("user")
+}
+
+/// One logged-in device. Cognito authenticates and hands out tokens but keeps
+/// no session list of its own — there is no API to enumerate or revoke a single
+/// login — so a row here is what makes "signed-in devices" and "sign out this
+/// device" possible.
+model UserSession {
+  id     Int  @id @default(autoincrement())
+  userId Int  @map("user_id")
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Cognito's `origin_jti`. It is minted alongside the refresh token and stays
+  // the same across every access token refreshed from it, so it identifies one
+  // login rather than one token.
+  sessionKey String  @unique @map("session_key")
+  // What makes a row stand for a device rather than a login: Cognito's
+  // `device_key` when device tracking is on, otherwise the id the app sends in
+  // `x-device-id`. Logging in again from the same device reuses its row.
+  deviceKey  String? @map("device_key")
+
+  ipAddress  String? @map("ip_address")
+  userAgent  String? @map("user_agent") @db.Text
+  deviceName String? @map("device_name") @db.VarChar(120)
+  deviceType String? @map("device_type") @db.VarChar(16)
+  browser    String? @db.VarChar(48)
+  os         String? @db.VarChar(48)
+
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastSeenAt DateTime @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  // Fixed at creation from the refresh token's lifetime, never extended: past
+  // it the login is dead whatever this row says, and the prune sweeps it.
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz(6)
+
+  revokedAt     DateTime? @map("revoked_at") @db.Timestamptz(6)
+  revokedReason String?   @map("revoked_reason") @db.VarChar(24)
+
+  // The listing wants one user's live sessions, most recently seen first.
+  @@index([userId, revokedAt, lastSeenAt])
+  @@index([expiresAt])
+  @@map("user_session")
+}
+
+model Organization {
+  id               Int     @id @default(autoincrement()) @map("id")
+  name             String?
+  slug             String? @unique
+  email            String?
+  street           String?
+  suburb           String?
+  city             String?
+  state            String?
+  postalCode       String? @map("postal_code")
+  country          String?
+  addressNote      String? @map("address_note")
+  phone            String?
+  primaryPhoneNote String? @map("primary_phone_note")
+
+  secondaryPhone     String? @map("secondary_phone")
+  secondaryPhoneNote String? @map("secondary_phone_note")
+
+  coverImage                 String?                     @map("cover_image")
+  website                    String?
+  bookingPolicyNote          String?                     @map("booking_policy_note")
+  createdAt                  DateTime                    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                  DateTime                    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  bookingWindowDays          Int                         @default(30) @map("booking_window_days")
+  bookingWindowEndDate       DateTime                    @map("booking_window_end_date")
+  bookingWindowMode          String                      @default("ROLLING") @map("booking_window_mode")
+  bookingStaffSelectionMode  BookingStaffSelectionMode   @default(RANDOM_ONLY) @map("booking_staff_selection_mode")
+  bookingPaymentMode         BookingPaymentMode          @default(PAY_IN_STORE_ONLY) @map("booking_payment_mode")
+  timezone                   String                      @default("Australia/Sydney")
+  localKnowledge             String?                     @map("local_knowledge")
+  currency                   String                      @default("AUD")
+  aiRules                    String?                     @map("ai_rules")
+  payoutStatus               String                      @default("NOT_CREATED") @map("payout_status")
+  stripeAccountId            String?                     @unique @map("stripe_account_id")
+  bookingUrl                 String?                     @map("booking_url")
+  cancellationNoticeHours    Int                         @default(24) @map("cancellation_notice_hours")
+  sameServiceRebookBlockDays Int                         @default(0) @map("same_service_rebook_block_days")
+  rescheduleNoticeHours      Int                         @default(24) @map("reschedule_notice_hours")
+  bookingThemePaletteId      Int?                        @map("booking_theme_palette_id")
+  addons                     Addon[]
+  bookings                   Booking[]
+  chatMessages               ChatMessage[]
+  customers                  Customer[]
+  customerEnquiries          CustomerEnquiry[]
+  giftCards                  GiftCard[]
+  services                   Service[]
+  serviceGroups              ServiceGroup[]
+  staff                      Staff[]
+  workingHours               WorkingHour[]
+  workingHourOverrides       WorkingHourOverride[]
+  portfolioMedia             PortfolioMedia[]
+  users                      User[]
+  organizationSocials        OrganizationSocial[]
+  bookingThemePalette        BookingThemePalette?        @relation(fields: [bookingThemePaletteId], references: [id])
+  billing                    OrganizationBilling?
+  subscription               Subscription?
+  invoices                   Invoice[]
+  waitlistEntries            WaitlistEntry[]
+  loyaltySetting             OrganizationLoyaltySetting?
+  feedbacks                  Feedback[]
+  commissionRules            CommissionRule[]
+  staffCommissions           StaffCommission[]
+  staffDayScheduleSnapshots  StaffDayScheduleSnapshot[]
+  dailyJobStates             OrgDailyJobState[]
+  bookingImages              BookingImage[]
+  feedbackImages             FeedbackImage[]
+  issues                     Issue[]
+  issueImages                IssueImage[]
+  userRequests               UserRequest[]
+  marketingTemplates         MarketingTemplate[]
+  marketingCampaigns         MarketingCampaign[]
+  voiceCalls                 VoiceCall[]
+
+  @@map("organization")
+}
+
+model Staff {
+  id             Int                        @id @default(autoincrement()) @map("id")
+  name           String
+  phone          String?
+  isActive       Boolean                    @default(true) @map("is_active")
+  isLegacy       Boolean                    @default(false) @map("is_legacy")
+  createdAt      DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organizationId Int                        @map("organization_id")
+  deletedAt      DateTime?                  @map("deleted_at") @db.Timestamptz(6)
+  bookingTasks   BookingTask[]
+  waitlistTasks  WaitlistTask[]
+  organization   Organization               @relation(fields: [organizationId], references: [id])
+  blocks         StaffBlockTime[]
+  services       StaffService[]
+  workingHours   StaffWorkingHour[]
+  addons         AddonStaff[]
+  commissions    StaffCommission[]
+  daySnapshots   StaffDayScheduleSnapshot[]
+
+  @@map("staff")
+}
+
+model Service {
+  id              Int               @id @default(autoincrement()) @map("id")
+  name            String
+  description     String?
+  durationMinutes Int               @map("duration_minutes")
+  price           Float
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  status          String
+  coverImage      String?           @map("cover_image")
+  organizationId  Int               @map("organization_id")
+  serviceGroupId  Int?              @map("service_group_id")
+  sourceAddon     Addon?            @relation("AddonSource")
+  bookingTasks    BookingTask[]
+  waitlistTasks   WaitlistTask[]
+  organization    Organization      @relation(fields: [organizationId], references: [id])
+  serviceGroup    ServiceGroup?     @relation(fields: [serviceGroupId], references: [id])
+  addons          ServiceAddon[]
+  serviceImages   ServiceImage[]
+  staff           StaffService[]
+  commissions     StaffCommission[]
+
+  @@map("service")
+}
+
+model ServiceGroup {
+  id                    Int      @id @default(autoincrement())
+  name                  String
+  organizationId        Int
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  description           String?
+  maxConcurrentBookings Int?     @map("max_concurrent_bookings")
+  color                 String   @default("#0066FF08")
+  orderIndex            Int      @default(0) @map("order_index")
+
+  services     Service[]
+  addons       Addon[]
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@map("service_group")
+}
+
+model ServiceImage {
+  id        Int     @id @default(autoincrement()) @map("id")
+  url       String
+  serviceId Int     @map("service_id")
+  altText   String? @map("alt_text")
+  Service   Service @relation(fields: [serviceId], references: [id])
+
+  @@map("service_image")
+}
+
+model StaffService {
+  staffId   Int     @map("staff_id")
+  serviceId Int     @map("service_id")
+  Service   Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  Staff     Staff   @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@id([staffId, serviceId])
+  @@map("staff_service")
+}
+
+model Booking {
+  id                   Int                       @id @default(autoincrement()) @map("id")
+  startTime            DateTime                  @map("start_time") @db.Timestamptz(6)
+  endTime              DateTime                  @map("end_time") @db.Timestamptz(6)
+  status               String                    @default("PENDING")
+  createdAt            DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organizationId       Int                       @map("organization_id")
+  quantity             Int
+  giftCardRedemptionId Int?                      @map("gift_card_redemption_id")
+  publicId             String                    @unique @map("public_id")
+  email                String?                   @map("email")
+  firstName            String                    @map("first_name")
+  lastName             String                    @map("last_name")
+  phone                String                    @map("phone")
+  totalPrice           Float                     @map("total_price")
+  finalPrice           Float                     @map("final_price")
+  amountPaid           Float?                    @map("amount_paid")
+  bookingPaymentStatus BookingPaymentStatus      @default(UNPAID) @map("booking_payment_status")
+  bookingMode          String                    @default("PUBLIC") @map("booking_mode")
+  createdBy            String                    @default("OWNER") @map("created_by")
+  updatedBy            String                    @default("OWNER") @map("updated_by")
+  notes                String?                   @map("notes")
+  customerNotes        String?                   @map("customer_notes")
+  source               String                    @default("SYSTEM") @map("source")
+  customerId           Int                       @map("customer_id")
+  isReminded           Boolean                   @default(false) @map("is_reminded")
+  reminderEnabled      Boolean                   @default(false) @map("reminder_enabled")
+  isEmailReminded      Boolean                   @default(false) @map("is_email_reminded")
+  bookingPaymentType   BookingPaymentType        @default(IN_PERSON) @map("booking_payment_type")
+  customer             Customer                  @relation(fields: [customerId], references: [id])
+  organization         Organization              @relation(fields: [organizationId], references: [id])
+  bookingTasks         BookingTask[]
+  giftCardRedemption   GiftCardRedemption?
+  bookingEvents        BookingEvent[]
+  notificationLogs     NotificationLog[]
+  feedback             Feedback?
+  issue                Issue?
+  pointRedemptions     CustomerPointRedemption[]
+  bookingImages        BookingImage[]
+
+  @@index([startTime, endTime])
+  @@index([organizationId, status, source, startTime])
+  @@map("booking")
+}
+
+// Before/after photos attached to a booking. Many images per booking (multiple
+// BEFORE + multiple AFTER), each row belongs to exactly one booking. We store
+// only `s3Key` — the viewable URL is derived at read time (presigned GET for a
+// private bucket, or CDN base from env + s3Key for a public one).
+model BookingImage {
+  id             Int              @id @default(autoincrement())
+  bookingId      Int              @map("booking_id")
+  organizationId Int              @map("organization_id")
+  kind           BookingImageKind
+  s3Key          String           @map("s3_key")
+  uploadedBy     String?          @map("uploaded_by")
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  booking      Booking      @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([bookingId, kind])
+  @@index([organizationId])
+  @@map("booking_image")
+}
+
+// One feedback per booking (1:1 via unique booking_id). Feedback does not hold
+// a direct customer link — the customer is reached through the booking when
+// needed. `mode` decides whether that identity is exposed by the API: REAL
+// shows it, ANONYMOUS hides it (see FeedbackMapper).
+model Feedback {
+  id             Int          @id @default(autoincrement())
+  bookingId      Int          @unique @map("booking_id")
+  organizationId Int          @map("organization_id")
+  mode           FeedbackMode @default(REAL)
+  rating         Int          @map("rating")
+  comment        String?      @map("comment")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  booking      Booking         @relation(fields: [bookingId], references: [id])
+  organization Organization    @relation(fields: [organizationId], references: [id])
+  images       FeedbackImage[]
+
+  @@index([organizationId])
+  @@index([createdAt])
+  @@map("feedback")
+}
+
+// Customer-submitted review photos attached to a feedback (one feedback → many
+// photos). Only the s3Key is stored; the viewable URL is the public CDN base
+// (env) joined with the key, so it can never drift. Uploaded anonymously by the
+// customer via the public booking flow, hence no uploader column.
+model FeedbackImage {
+  id             Int      @id @default(autoincrement())
+  feedbackId     Int      @map("feedback_id")
+  organizationId Int      @map("organization_id")
+  s3Key          String   @map("s3_key")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  feedback     Feedback     @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([feedbackId])
+  @@index([organizationId])
+  @@map("feedback_image")
+}
+
+// One customer-reported issue per booking (1:1 via unique booking_id). Unlike
+// Feedback, an issue is always identified — the customer must be reachable for
+// the salon to resolve it, so there is no anonymous mode. `status` tracks the
+// lightweight OPEN → IN_PROGRESS → RESOLVED workflow. `resolutionNote` is a
+// staff-only internal note and is never exposed to the customer.
+model Issue {
+  id             Int         @id @default(autoincrement())
+  bookingId      Int         @unique @map("booking_id")
+  organizationId Int         @map("organization_id")
+  status         IssueStatus @default(OPEN)
+  description    String      @map("description")
+  resolutionNote String?     @map("resolution_note")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  booking      Booking      @relation(fields: [bookingId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id])
+  images       IssueImage[]
+
+  @@index([organizationId, status])
+  @@index([createdAt])
+  @@map("issue")
+}
+
+// Photos a customer attaches to an issue (one issue → many photos). Mirrors
+// FeedbackImage: only the s3Key is stored and the viewable URL is derived from
+// the public CDN base (env) joined with the key. Uploaded via the public
+// booking flow, hence no uploader column.
+model IssueImage {
+  id             Int      @id @default(autoincrement())
+  issueId        Int      @map("issue_id")
+  organizationId Int      @map("organization_id")
+  s3Key          String   @map("s3_key")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  issue        Issue        @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([issueId])
+  @@index([organizationId])
+  @@map("issue_image")
+}
+
+// A salon asking the Beauta team to do something for them — set their account
+// up, migrate their data in, or export it back out. Raised from the org portal
+// and worked by us, so none of this is customer-facing.
+//
+// Attachments are kept as a plain array of S3 keys rather than a child table.
+// They are write-once and only ever read back with their request, so a join
+// table would buy ordering and per-row metadata that nothing here needs. The
+// key is the whole record: the viewable URL is derived from the public CDN base
+// at read time, so moving buckets never leaves stale rows behind.
+model UserRequest {
+  id             Int               @id @default(autoincrement())
+  // The handle a salon quotes back at us. Six characters from an alphabet
+  // with no look-alikes, because it gets read down a phone line and typed
+  // into a search box; the autoincrement id stays internal.
+  ref            String            @unique @db.VarChar(6)
+  organizationId Int               @map("organization_id")
+  // Who raised it, so the team can reply to a person rather than to a salon.
+  userId         Int               @map("user_id")
+  type           UserRequestType
+  status         UserRequestStatus @default(PENDING)
+  content        String
+  imageKeys      String[]          @map("image_keys")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+
+  // The list endpoint pages an organization's requests newest first, and
+  // narrows by status; the composite covers both without a second index.
+  @@index([organizationId, status])
+  @@index([organizationId, createdAt])
+  @@index([userId])
+  @@map("user_request")
+}
+
+// Versioned commission rate. A rule applies to one service, or to the whole org
+// when serviceId is null (fallback/default rate). Rates are NEVER mutated in
+// place: to change a rate you close the current row (effectiveTo = now) and
+// insert a new one, so the full "what the rate was, and when" history is kept.
+// A commission rate that applies to an optional staff and an optional item
+// (a SERVICE or an ADDON). Both nullable, so one row can target any specificity:
+//   staff + item  > item (any staff)  > staff (any item)  > org-wide default.
+// Rates are versioned: changing one closes the current row (effectiveTo) and
+// opens a new one, so historical rates are preserved. itemId is polymorphic
+// (points at service OR addon per itemType) → no FK, resolved in app code.
+model CommissionRule {
+  id             Int                 @id @default(autoincrement())
+  organizationId Int                 @map("organization_id")
+  staffId        Int?                @map("staff_id")
+  itemType       CommissionItemType? @map("item_type")
+  itemId         Int?                @map("item_id")
+  percentage     Decimal             @map("percentage") @db.Decimal(5, 2)
+  effectiveFrom  DateTime            @default(now()) @map("effective_from") @db.Timestamptz(6)
+  effectiveTo    DateTime?           @map("effective_to") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  organization Organization      @relation(fields: [organizationId], references: [id])
+  commissions  StaffCommission[]
+
+  @@index([organizationId, staffId, itemType, itemId, effectiveFrom])
+  @@map("commission_rule")
+}
+
+// Immutable snapshot of the commission a staff earned for one completed task.
+// baseAmount, percentage and amount are FROZEN at completion time, so later
+// CommissionRule changes never alter historical earnings. One row per task
+// (booking_task_id is unique), which also makes recording idempotent.
+model StaffCommission {
+  id               Int              @id @default(autoincrement())
+  organizationId   Int              @map("organization_id")
+  staffId          Int              @map("staff_id")
+  bookingTaskId    Int              @unique @map("booking_task_id")
+  serviceId        Int?             @map("service_id")
+  commissionRuleId Int?             @map("commission_rule_id")
+  baseAmount       Decimal          @map("base_amount") @db.Decimal(10, 2)
+  percentage       Decimal          @map("percentage") @db.Decimal(5, 2)
+  amount           Decimal          @map("amount") @db.Decimal(10, 2)
+  status           CommissionStatus @default(PENDING)
+  completedAt      DateTime         @map("completed_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  staff          Staff           @relation(fields: [staffId], references: [id])
+  bookingTask    BookingTask     @relation(fields: [bookingTaskId], references: [id])
+  service        Service?        @relation(fields: [serviceId], references: [id])
+  commissionRule CommissionRule? @relation(fields: [commissionRuleId], references: [id])
+
+  @@index([organizationId, staffId])
+  @@index([staffId, completedAt])
+  @@map("staff_commission")
+}
+
+model GiftCard {
+  id                 Int                 @id @default(autoincrement())
+  name               String
+  description        String?
+  coverImage         String?             @map("cover_image")
+  price              Float
+  currency           String              @default("AUD")
+  organizationId     Int                 @map("organization_id")
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  redeemValue        Float               @map("redeem_value")
+  duration           Int                 @map("duration_days")
+  status             String              @default("PUBLIC")
+  organization       Organization        @relation(fields: [organizationId], references: [id])
+  purchasedGiftCards PurchasedGiftCard[]
+  createdBy          String              @default("OWNER") @map("created_by")
+  updatedBy          String              @default("OWNER") @map("updated_by")
+
+  @@map("gift_card_product")
+}
+
+model PurchasedGiftCard {
+  id             Int                  @id @default(autoincrement())
+  code           String
+  initialAmount  Float                @map("initial_amount")
+  balance        Float
+  recipientName  String?              @map("recipient_name")
+  fromName       String               @default("someone") @map("from_name")
+  recipientEmail String               @map("recipient_email")
+  buyerEmail     String?              @map("buyer_email")
+  message        String?
+  expiresAt      DateTime             @map("expires_at") @db.Timestamptz(6)
+  status         String               @default("ACTIVE")
+  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+  giftCardId     Int                  @map("gift_card_id")
+  organizationId Int                  @default(1) @map("organization_id")
+  redemptions    GiftCardRedemption[]
+  giftCard       GiftCard             @relation(fields: [giftCardId], references: [id])
+
+  @@unique([code, organizationId])
+  @@map("purchased_gift_card")
+}
+
+model GiftCardRedemption {
+  id                  Int               @id @default(autoincrement())
+  amount              Float
+  createdAt           DateTime          @default(now()) @db.Timestamptz(6)
+  purchasedGiftCardId Int               @map("purchased_gift_card_id")
+  bookingId           Int               @unique @map("booking_id")
+  booking             Booking           @relation(fields: [bookingId], references: [id])
+  purchasedGiftCard   PurchasedGiftCard @relation(fields: [purchasedGiftCardId], references: [id])
+
+  @@map("gift_card_redemption")
+}
+
+model WorkingHour {
+  id             Int          @id @default(autoincrement())
+  organizationId Int          @map("organization_id")
+  dayOfWeek      Int          @map("day_of_week")
+  openTime       String       @map("open_time")
+  closeTime      String       @map("close_time")
+  isClosed       Boolean      @default(false) @map("is_closed")
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, dayOfWeek])
+  @@map("working_hour")
+}
+
+model WorkingHourOverride {
+  id             Int      @id @default(autoincrement())
+  organizationId Int      @map("organization_id")
+  date           String   @map("date")
+  openTime       String   @map("open_time")
+  closeTime      String   @map("close_time")
+  isClosed       Boolean  @default(false) @map("is_closed")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  deletedAt    DateTime?    @map("deleted_at") @db.Timestamptz(6)
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@map("working_hour_override")
+}
+
+model Addon {
+  id              Int            @id @default(autoincrement())
+  name            String
+  price           Int
+  duration        Int
+  description     String?
+  type            String
+  status          String         @default("PUBLIC")
+  sourceServiceId Int?           @unique @map("source_service_id")
+  serviceGroupId  Int?           @map("service_group_id")
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organizationId  Int            @map("organization_id")
+  priorityOrder   Int            @default(0) @map("priority_order")
+  organization    Organization   @relation(fields: [organizationId], references: [id])
+  sourceService   Service?       @relation("AddonSource", fields: [sourceServiceId], references: [id])
+  serviceGroup    ServiceGroup?  @relation(fields: [serviceGroupId], references: [id])
+  addonStaff      AddonStaff[]
+  bookingTasks    BookingTask[]
+  services        ServiceAddon[]
+  waitlistTasks   WaitlistTask[]
+
+  @@map("add_ons")
+}
+
+model ServiceAddon {
+  id        Int     @id @default(autoincrement())
+  serviceId Int     @map("service_id")
+  addonId   Int     @map("addon_id")
+  addon     Addon   @relation(fields: [addonId], references: [id], onDelete: Cascade)
+  service   Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([serviceId, addonId])
+  @@map("service_addons")
+}
+
+model AddonStaff {
+  addonId   Int
+  staffId   Int
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  addon     Addon    @relation(fields: [addonId], references: [id])
+  staff     Staff    @relation(fields: [staffId], references: [id])
+
+  @@id([addonId, staffId])
+  @@map("addon_staff")
+}
+
+model BookingTask {
+  id               Int              @id @default(autoincrement())
+  bookingId        Int              @map("booking_id")
+  taskType         String           @map("task_type")
+  serviceId        Int?             @map("service_id")
+  addonId          Int?             @map("addon_id")
+  staffId          Int              @map("staff_id")
+  startTime        DateTime         @map("start_time") @db.Timestamptz(6)
+  endTime          DateTime         @map("end_time") @db.Timestamptz(6)
+  orderIndex       Int              @map("order_index")
+  participantIndex Int              @default(1) @map("participant_index")
+  deletedAt        DateTime?        @map("deleted_at") @db.Timestamptz(6)
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  addon            Addon?           @relation(fields: [addonId], references: [id])
+  booking          Booking          @relation(fields: [bookingId], references: [id])
+  service          Service?         @relation(fields: [serviceId], references: [id])
+  staff            Staff            @relation(fields: [staffId], references: [id])
+  commission       StaffCommission?
+
+  @@map("booking_task")
+}
+
+model StaffBlockTime {
+  id            Int           @id @default(autoincrement())
+  staffId       Int           @map("staff_id")
+  startAt       DateTime      @map("start_at")
+  endAt         DateTime      @map("end_at")
+  reason        String?
+  recurringType RecurringType @default(NONE) @map("recurring_type")
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime      @default(now()) @map("updated_at") @db.Timestamptz(6)
+  staff         Staff         @relation(fields: [staffId], references: [id])
+
+  @@index([staffId, startAt, endAt])
+  @@map("staff_block_time")
+}
+
+model CustomerEnquiry {
+  id             Int          @id @default(autoincrement())
+  organizationId Int          @map("organization_id")
+  message        String
+  status         String       @default("NEW")
+  responseTitle  String?      @map("response_title")
+  responseBody   String?      @map("response_body")
+  respondedAt    DateTime?    @map("responded_at")
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  email          String       @map("email")
+  firstName      String       @map("first_name")
+  lastName       String       @map("last_name")
+  phone          String?      @map("phone")
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId])
+  @@index([status])
+  @@map("customer_enquiries")
+}
+
+model StaffWorkingHour {
+  id        Int      @id @default(autoincrement())
+  staffId   Int      @map("staff_id")
+  dayOfWeek Int      @map("day_of_week")
+  startTime String   @map("start_time")
+  endTime   String   @map("end_time")
+  isOff     Boolean  @default(false) @map("is_off")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  staff     Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@unique([staffId, dayOfWeek])
+  @@map("staff_working_hour")
+}
+
+// One row = the snapshot of a staff member's working hours for ONE calendar
+// day (in the organization's timezone): what time they start/end, whether the
+// day is off, and which slots are blocked (JSON array of
+// { startTime, endTime, reason }). One row per staff per date; snapshots for
+// past dates are never rewritten by later schedule changes, so the table is
+// the complete schedule history.
+model StaffDayScheduleSnapshot {
+  id             Int      @id @default(autoincrement())
+  staffId        Int      @map("staff_id")
+  // Denormalized from staff so worked-hours queries can filter by org without
+  // joining through staff. A staff's org never changes, so it stays in sync.
+  organizationId Int      @map("organization_id")
+  date           DateTime @db.Date
+  startTime      String   @map("start_time")
+  endTime        String   @map("end_time")
+  isOff          Boolean  @default(false) @map("is_off")
+  blockedSlots   Json     @default("[]") @map("blocked_slots")
+  // Actual on-the-clock minutes for the day: working window minus blocks that
+  // fall inside it. Computed at snapshot time so each row locks in the number.
+  workedMinutes  Int      @default(0) @map("worked_minutes")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  staff        Staff        @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([staffId, date])
+  @@index([organizationId, date])
+  @@map("staff_day_schedule_snapshot")
+}
+
+// Per-organization, per-job watermark for the end-of-day close jobs (snapshot,
+// commission). lastClosedDate = the last org-local day fully processed for this
+// job; a day is only closed after EVERY staff of the org is done, so a partial
+// run (e.g. 5 of 7 staff) never advances it and is retried. lockedUntil is a
+// short lease that stops two workers running the same org-day at once — it is
+// separate from lastClosedDate on purpose (claiming must not imply "done").
+model OrgDailyJobState {
+  id             Int          @id @default(autoincrement())
+  organizationId Int          @map("organization_id")
+  jobType        DailyJobType @map("job_type")
+  lastClosedDate DateTime?    @map("last_closed_date") @db.Date
+  lockedUntil    DateTime?    @map("locked_until") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, jobType])
+  @@map("org_daily_job_state")
+}
+
+model ChatMessage {
+  id             String       @id @default(cuid())
+  organizationId Int          @map("organization_id")
+  sessionId      String       @map("session_id")
+  role           String
+  content        String
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, sessionId])
+  @@index([createdAt])
+  @@map("chat_message")
+}
+
+model StripeWebhookEvent {
+  id        String   @id
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("stripe_webhook_event")
+}
+
+model Customer {
+  id                Int                        @id @default(autoincrement())
+  firstName         String                     @map("first_name")
+  lastName          String                     @map("last_name")
+  email             String?                    @map("email")
+  phone             String                     @map("phone")
+  createdAt         DateTime                   @default(now()) @map("created_at")
+  updatedAt         DateTime                   @updatedAt @map("updated_at")
+  organizationId    Int                        @map("organization_id")
+  isBlocked         Boolean                    @default(false) @map("is_blocked")
+  bookings          Booking[]
+  organization      Organization               @relation(fields: [organizationId], references: [id])
+  notificationLogs  NotificationLog[]
+  waitlistEntries   WaitlistEntry[]
+  preferences       String?                    @map("preferences")
+  pointBalance      CustomerPoint?
+  pointTransactions CustomerPointTransaction[]
+  pointRedemptions  CustomerPointRedemption[]
+
+  marketingPreference CustomerMarketingPreference?
+  marketingRecipients MarketingCampaignRecipient[]
+
+  // Day and month only — a salon wants to wish someone a happy birthday, not
+  // know their age, and asking for a birth year invites a data question nobody
+  // needs to answer.
+  //
+  // Two integers rather than a date because the only query is "whose birthday
+  // is today": an equality match both columns, which the index below serves.
+  // A DATE column would need EXTRACT on both sides and could not use one.
+  birthDay   Int? @map("birth_day")
+  birthMonth Int? @map("birth_month")
+
+  @@unique([organizationId, phone])
+  @@index([organizationId, birthMonth, birthDay])
+  @@index([organizationId, email])
+  @@index([organizationId, firstName])
+  @@index([organizationId, lastName])
+  @@map("customer")
+}
+
+// Current points balance per customer (1:1 with Customer). Kept as a separate
+// table so balance reads/writes don't touch the Customer row, and so loyalty
+// features (tiers, expiry, etc.) can extend here later.
+model CustomerPoint {
+  id         Int @id @default(autoincrement())
+  customerId Int @unique @map("customer_id")
+  balance    Int @default(0) @map("balance")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([customerId])
+  @@map("customer_point")
+}
+
+// Append-only history of every point change. `points` is always a positive
+// amount; `type` (ADD/DEDUCT) carries the direction. `balanceAfter` snapshots
+// the resulting balance for easy auditing without replaying the whole ledger.
+model CustomerPointTransaction {
+  id           Int                  @id @default(autoincrement())
+  customerId   Int                  @map("customer_id")
+  type         PointTransactionType
+  points       Int                  @map("points")
+  balanceAfter Int                  @map("balance_after")
+  note         String?              @map("note")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  customer   Customer                 @relation(fields: [customerId], references: [id])
+  redemption CustomerPointRedemption? @relation("PointRedemptionDebit")
+  refundFor  CustomerPointRedemption? @relation("PointRedemptionRefund")
+
+  @@index([customerId])
+  @@index([createdAt])
+  @@index([customerId, createdAt])
+  @@map("customer_point_transaction")
+}
+
+// A point-redemption event: the customer spends points in exchange for a
+// reward/discount. Each redemption is backed by one DEDUCT entry in
+// customer_point_transaction (the ledger movement), linked 1:1 below. `points`
+// is the positive amount spent; `value` is the monetary value granted for it.
+// Kept minimal on purpose — extend with reward/booking references later.
+model CustomerPointRedemption {
+  id                  Int                           @id @default(autoincrement())
+  customerId          Int                           @map("customer_id")
+  bookingId           Int?                          @map("booking_id")
+  transactionId       Int                           @unique @map("transaction_id")
+  refundTransactionId Int?                          @unique @map("refund_transaction_id")
+  status              CustomerPointRedemptionStatus @default(ACTIVE)
+  points              Int                           @map("points")
+  value               Decimal                       @default(0) @map("value") @db.Decimal(10, 2)
+  note                String?                       @map("note")
+  refundedAt          DateTime?                     @map("refunded_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  customer          Customer                  @relation(fields: [customerId], references: [id])
+  booking           Booking?                  @relation(fields: [bookingId], references: [id])
+  transaction       CustomerPointTransaction  @relation("PointRedemptionDebit", fields: [transactionId], references: [id])
+  refundTransaction CustomerPointTransaction? @relation("PointRedemptionRefund", fields: [refundTransactionId], references: [id])
+
+  @@index([customerId])
+  @@index([bookingId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("customer_point_redemption")
+}
+
+model OrganizationLoyaltySetting {
+  id             Int @id @default(autoincrement())
+  organizationId Int @unique @map("organization_id")
+
+  enabled       Boolean @default(false) @map("enabled")
+  spendPerPoint Decimal @default(1) @map("spend_per_point") @db.Decimal(10, 2)
+  pointValue    Decimal @default(0) @map("point_value") @db.Decimal(10, 2)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@map("organization_loyalty_setting")
+}
+
+model ServiceForecast {
+  id              Int      @id @default(autoincrement())
+  organizationId  Int      @map("organization_id")
+  serviceId       Int      @map("service_id")
+  forecastDate    DateTime @map("forecast_date") @db.Date
+  predictedDemand Int      @map("predicted_demand")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([organizationId, serviceId, forecastDate])
+  @@map("service_forecast")
+}
+
+model BookingTracking {
+  id BigInt @id @default(autoincrement())
+
+  organizationId Int    @map("organization_id")
+  sessionId      String @map("session_id")
+
+  serviceId    Int?      @map("service_id")
+  selectedDate DateTime? @map("selected_date")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([organizationId])
+  @@index([serviceId])
+  @@map("booking_tracking")
+}
+
+model BookingVisit {
+  id Int @id @default(autoincrement())
+
+  organizationId Int    @map("organization_id")
+  visitorId      String @map("visitor_id")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([organizationId, visitorId])
+  @@index([organizationId])
+  @@map("booking_visit")
+}
+
+model PortfolioMedia {
+  id Int @id @default(autoincrement())
+
+  organizationId Int          @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  url String @map("url")
+
+  title             String?
+  description       String?
+  systemTitle       String?                  @map("system_title")
+  systemDescription String?                  @map("system_description")
+  status            String                   @default("PUBLIC")
+  deletedAt         DateTime?                @map("deleted_at") @db.Timestamptz(6)
+  mediaType         String                   @default("IMAGE") @map("media_type")
+  contentType       String                   @default("PRODUCT") @map("content_type")
+  portfolioCategory PortfolioCategory        @default(NAIL) @map("portfolio_category")
+  createdAt         DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  searchVector      Unsupported("tsvector")? @map("search_vector")
+
+  embedding Unsupported("vector(512)")?
+
+  tags PortfolioMediaTag[]
+
+  @@index([organizationId])
+  @@map("portfolio_media")
+}
+
+model BookingEvent {
+  id        Int @id @default(autoincrement())
+  bookingId Int @map("booking_id")
+
+  type BookingEventType
+
+  oldStartTime DateTime? @map("old_start_time") @db.Timestamptz(6)
+  newStartTime DateTime? @map("new_start_time") @db.Timestamptz(6)
+
+  oldEndTime DateTime? @map("old_end_time") @db.Timestamptz(6)
+  newEndTime DateTime? @map("new_end_time") @db.Timestamptz(6)
+
+  createdBy EventActorType @map("created_by")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  booking Booking @relation(fields: [bookingId], references: [id])
+
+  notificationLogs NotificationLog[]
+
+  @@index([bookingId])
+  @@map("booking_event")
+}
+
+model NotificationLog {
+  id Int @id @default(autoincrement())
+
+  bookingId  Int? @map("booking_id")
+  customerId Int  @map("customer_id")
+
+  type      NotificationChannel
+  eventType NotificationEventType @map("event_type")
+
+  sentAt       DateTime?          @map("sent_at") @db.Timestamptz(6)
+  status       NotificationStatus @default(PENDING)
+  errorMessage String?            @map("error_message")
+
+  bookingEventId Int? @map("booking_event_id")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  booking      Booking?      @relation(fields: [bookingId], references: [id])
+  customer     Customer      @relation(fields: [customerId], references: [id])
+  bookingEvent BookingEvent? @relation(fields: [bookingEventId], references: [id])
+
+  @@index([bookingId])
+  @@index([customerId])
+  @@index([bookingEventId])
+  @@map("notification_log")
+}
+
+model SmsUsage {
+  id             Int      @id @default(autoincrement())
+  sid            String?  @unique
+  organizationId Int      @map("organization_id")
+  bookingId      Int?     @map("booking_id")
+  phoneNumber    String   @map("phone_number")
+  status         String   @map("status")
+  segments       Int      @map("segments")
+  cost           Float    @map("cost")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  isSynced       Boolean  @default(false) @map("is_synced")
+
+  @@index([organizationId])
+  @@index([bookingId])
+  @@map("sms_usage")
+}
+
+model Tag {
+  id          Int                @id @default(autoincrement())
+  name        String
+  type        PortfolioCategory?
+  contentType String             @default("PRODUCT") @map("content_type")
+  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  mediaTags PortfolioMediaTag[]
+
+  @@unique([name, type, contentType])
+  @@map("tag")
+}
+
+model PortfolioMediaTag {
+  id Int @id @default(autoincrement())
+
+  mediaId Int            @map("media_id")
+  media   PortfolioMedia @relation(fields: [mediaId], references: [id])
+
+  tagId Int @map("tag_id")
+  tag   Tag @relation(fields: [tagId], references: [id])
+
+  weight    Float?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([mediaId, tagId])
+  @@index([mediaId])
+  @@index([tagId])
+  @@map("portfolio_media_tag")
+}
+
+model Location {
+  id         Int      @id @default(autoincrement())
+  suburb     String
+  city       String?
+  state      String?
+  stateShort String?  @map("state_short")
+  country    String
+  postalCode String   @map("postal_code")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([country])
+  @@index([country, state])
+  @@index([country, city])
+  @@index([country, city, suburb])
+  @@map("location")
+}
+
+model OrganizationSocial {
+  id             Int    @id @default(autoincrement())
+  organizationId Int    @map("organization_id")
+  platform       String
+  url            String
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId])
+  @@map("organization_social")
+}
+
+model PaymentDetails {
+  id                    Int           @id @default(autoincrement())
+  purchasedGiftCardId   Int?          @map("purchased_gift_card_id")
+  stripePaymentIntentId String?       @unique @map("stripe_payment_intent_id")
+  stripeSessionId       String        @unique @map("stripe_session_id")
+  paymentStatus         PaymentStatus @map("payment_status")
+  amount                Int
+  currency              String        @default("AUD")
+  metadata              Json?
+  createdAt             DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("payment_details")
+}
+
+model BookingThemePalette {
+  id               Int      @id @default(autoincrement())
+  code             String   @unique
+  name             String
+  primaryColor     String   @map("primary_color")
+  primaryDarkColor String   @map("primary_dark_color")
+  secondaryColor   String   @map("secondary_color")
+  surfaceColor     String   @map("surface_color")
+  textMainColor    String   @map("text_main_color")
+  textMutedColor   String   @map("text_muted_color")
+  accentColor      String   @map("accent_color")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  organizations Organization[]
+
+  @@map("booking_theme_palette")
+}
+
+model Role {
+  id             Int      @id @default(autoincrement())
+  organizationId Int      @map("organization_id")
+  name           String
+  isAdmin        Boolean  @default(false) @map("is_admin")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at")
+
+  users         User[]
+  accessModules RoleAccessModule[]
+
+  @@map("roles")
+}
+
+model AccessModule {
+  id          Int      @id @default(autoincrement())
+  code        String   @unique
+  name        String
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+
+  roles RoleAccessModule[]
+
+  @@map("access_modules")
+}
+
+model RoleAccessModule {
+  id             Int      @id @default(autoincrement())
+  roleId         Int      @map("role_id")
+  accessModuleId Int      @map("access_module_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  role         Role         @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  accessModule AccessModule @relation(fields: [accessModuleId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, accessModuleId])
+  @@map("role_access_modules")
+}
+
+model BookingPaymentDetails {
+  id        Int @id @default(autoincrement())
+  bookingId Int @unique @map("booking_id")
+
+  stripePaymentIntentId String? @unique @map("stripe_payment_intent_id")
+  stripeSessionId       String? @unique @map("stripe_session_id")
+
+  paymentStatus PaymentStatus
+  amount        Int
+  currency      String        @default("AUD")
+  metadata      Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("booking_payment_details")
+}
+
+model Receipt {
+  id          Int      @id @default(autoincrement())
+  receiptId   String   @unique @map("receipt_id")
+  type        String // GIFT_CARD, BOOKING, SUBSCRIPTION, REFUND
+  referenceId Int      @map("reference_id")
+  url         String // S3 link
+  amount      Float
+  currency    String   @default("NZD")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("receipt")
+}
+
+model OrganizationBilling {
+  organizationId Int @id
+
+  legalName String? @map("legal_name")
+  taxId     String? @map("tax_id")
+  taxIdType String? @map("tax_id_type")
+
+  billingEmail String? @map("billing_email")
+
+  addressLine1 String? @map("address_line1")
+  addressLine2 String? @map("address_line2")
+  city         String?
+  state        String?
+  postcode     String?
+  country      String?
+
+  contactName String? @map("contact_name")
+
+  stripeCustomerId String? @unique @map("stripe_customer_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@map("organization_billing")
+}
+
+model SubscriptionPlan {
+  id       Int     @id @default(autoincrement())
+  name     String
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  prices SubscriptionPrice[]
+
+  @@map("subscription_plan")
+}
+
+model SubscriptionPrice {
+  id     Int @id @default(autoincrement())
+  planId Int @map("plan_id")
+
+  // ISO 3166-1 alpha-2 country code this price applies to, e.g. "AU", "NZ".
+  // Drives which currency/price an org sees based on its country.
+  country       String
+  amount        Int
+  currency      String
+  // Billing cycle length in MONTHS. 1 = monthly, 6 = every 6 months, 12 = yearly.
+  intervalCount Int    @default(1) @map("interval_count")
+
+  stripePriceId String @unique @map("stripe_price_id")
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  plan SubscriptionPlan @relation(fields: [planId], references: [id])
+
+  subscriptions Subscription[]
+
+  @@unique([planId, country, intervalCount])
+  @@index([country, intervalCount])
+  @@map("subscription_price")
+}
+
+model Subscription {
+  id Int @id @default(autoincrement())
+
+  organizationId Int @unique @map("organization_id")
+
+  stripeSubscriptionId String? @unique @map("stripe_subscription_id")
+
+  priceId       Int?    @map("price_id")
+  stripePriceId String? @map("stripe_price_id")
+
+  status SubscriptionStatus
+
+  // When the trial ends — the moment the first charge / activation happens.
+  // Set during the DIY trial and while the Stripe subscription is trialing.
+  // Null when there is no trial in play (e.g. a plain active subscription).
+  trialEndsAt DateTime? @map("trial_ends_at") @db.Timestamptz(6)
+
+  // End of the current PAID billing period — i.e. the next renewal date.
+  // Null during a trial-only state where no paid period has started yet.
+  currentPeriodEnd DateTime? @map("current_period_end") @db.Timestamptz(6)
+
+  // True when the subscription is scheduled to cancel at the end of the current
+  // period (trial end or renewal). Access continues until then; no further
+  // charge. Mirrors Stripe's cancel_at_period_end.
+  cancelAtPeriodEnd Boolean @default(false) @map("cancel_at_period_end")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  price SubscriptionPrice? @relation(fields: [priceId], references: [id])
+
+  @@map("subscription")
+}
+
+model Invoice {
+  id            Int    @id @default(autoincrement())
+  invoiceNumber String @unique @map("invoice_number")
+
+  organizationId Int @map("organization_id")
+
+  type   String
+  status String
+
+  currency  String
+  subtotal  Decimal
+  taxAmount Decimal
+  total     Decimal
+
+  taxRate  Decimal?
+  taxLabel String?
+
+  stripeInvoiceId String? @map("stripe_invoice_id")
+
+  issuedAt DateTime  @map("issued_at")
+  paidAt   DateTime? @map("paid_at")
+
+  pdfUrl String? @map("pdf_url")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  items InvoiceItem[]
+
+  @@map("invoice")
+}
+
+model InvoiceItem {
+  id        Int @id @default(autoincrement())
+  invoiceId Int @map("invoice_id")
+
+  description String
+  quantity    Int     @default(1)
+  unitPrice   Decimal @map("unit_price")
+  amount      Decimal
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+
+  @@map("invoice_item")
+}
+
+model WaitlistEntry {
+  id             Int            @id @default(autoincrement()) @map("id")
+  organizationId Int            @map("organization_id")
+  customerId     Int            @map("customer_id")
+  publicId       String         @unique @map("public_id")
+  status         String         @default("PENDING")
+  email          String?        @map("email")
+  firstName      String         @map("first_name")
+  lastName       String         @map("last_name")
+  phone          String         @map("phone")
+  notes          String?        @map("notes")
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  customer       Customer       @relation(fields: [customerId], references: [id])
+  waitlistTasks  WaitlistTask[]
+  slots          WaitlistSlot[]
+
+  @@index([organizationId, status])
+  @@map("waitlist_entry")
+}
+
+model WaitlistSlot {
+  id              Int           @id @default(autoincrement()) @map("id")
+  waitlistEntryId Int           @map("waitlist_entry_id")
+  startTime       DateTime      @map("start_time") @db.Timestamptz(6)
+  endTime         DateTime      @map("end_time") @db.Timestamptz(6)
+  status          String        @default("PENDING")
+  waitlistEntry   WaitlistEntry @relation(fields: [waitlistEntryId], references: [id], onDelete: Cascade)
+
+  @@index([startTime, endTime])
+  @@map("waitlist_slot")
+}
+
+model WaitlistTask {
+  id              Int           @id @default(autoincrement())
+  waitlistEntryId Int           @map("waitlist_entry_id")
+  taskType        String        @map("task_type")
+  serviceId       Int?          @map("service_id")
+  addonId         Int?          @map("addon_id")
+  staffId         Int           @map("staff_id")
+  orderIndex      Int           @map("order_index")
+  deletedAt       DateTime?     @map("deleted_at") @db.Timestamptz(6)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  addon           Addon?        @relation(fields: [addonId], references: [id])
+  waitlistEntry   WaitlistEntry @relation(fields: [waitlistEntryId], references: [id], onDelete: Cascade)
+  service         Service?      @relation(fields: [serviceId], references: [id])
+  staff           Staff         @relation(fields: [staffId], references: [id])
+
+  @@map("waitlist_task")
+}
+
+model SentEmail {
+  id             Int      @id @default(autoincrement())
+  organizationId Int      @map("organization_id")
+  title          String   @db.VarChar(255)
+  email          String
+  customerName   String   @map("customer_name") @db.VarChar(255)
+  sentAt         DateTime @default(now()) @map("sent_at") @db.Timestamptz(6)
+  status         String   @default("SENT")
+
+  @@index([email])
+  @@index([organizationId])
+  @@map("sent_email")
+}
+
+model ExportJob {
+  id             Int @id @default(autoincrement())
+  organizationId Int @map("organization_id")
+
+  type   ExportType
+  status ExportStatus @default(PENDING)
+
+  s3Key String? @map("s3_key")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([organizationId, type, createdAt])
+  @@map("export_job")
+}
+
+// A campaign starts from one of these. The HTML itself lives in Mailjet's
+// template editor — this row is our pointer to it plus the bits we need to list
+// and pick one without calling Mailjet.
+//
+// `organizationId` is null for the starter templates we ship, which every org
+// can use but none can edit, so a salon's list is its own rows plus the null
+// ones.
+model MarketingTemplate {
+  id             Int  @id @default(autoincrement())
+  organizationId Int? @map("organization_id")
+
+  name              String                    @db.VarChar(255)
+  category          MarketingTemplateCategory @default(OTHER)
+  // The Mailjet TemplateID passed to the Send API. Unique per org so the same
+  // template can't be registered twice; the null-org rows share the global slot.
+  mailjetTemplateId Int                       @map("mailjet_template_id")
+  // Default subject for campaigns built from this template. Null means "use the
+  // subject set on the Mailjet template itself".
+  subject           String?                   @db.VarChar(255)
+  // Which fields the salon has to fill in for THIS template, as a form spec the
+  // app renders directly: [{ key, label, type, required, placeholder, help }].
+  //
+  // It lists only what a human supplies — the offer wording, a promo code. The
+  // variables the API fills itself (customer name, salon details, booking link,
+  // unsubscribe URL) are never in here, so they never reach the form.
+  //
+  // Json is jsonb on Postgres, which is what we want: these are read on every
+  // campaign screen and never queried by key.
+  variables         Json?
+  // The rendered body, stored so the gallery can draw every template without a
+  // Mailjet round trip each time. Mailjet's management API sits under a much
+  // lower rate limit than the send API, and one salon opening the page would
+  // otherwise cost one call per template.
+  //
+  // This is a copy, and it is safe to be one: the HTML is authored in the
+  // beauta-template repo and pushed to both places by the same upload. Editing
+  // a template in Mailjet's own editor is what would make it stale — re-run the
+  // upload after doing that. Null falls back to fetching from Mailjet.
+  previewHtml       String?                   @map("preview_html") @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  organization Organization?       @relation(fields: [organizationId], references: [id])
+  campaigns    MarketingCampaign[]
+
+  @@unique([organizationId, mailjetTemplateId])
+  @@index([organizationId, category])
+  @@map("marketing_template")
+}
+
+// One blast.
+//
+// `mailjetTemplateId` is copied off the template rather than read through the
+// relation: the salon may later point that template row somewhere else or
+// archive it, and a sent campaign has to keep saying which Mailjet template
+// actually went out.
+model MarketingCampaign {
+  id             Int  @id @default(autoincrement())
+  organizationId Int  @map("organization_id")
+  templateId     Int? @map("template_id")
+
+  name              String  @db.VarChar(255)
+  mailjetTemplateId Int     @map("mailjet_template_id")
+  subject           String? @db.VarChar(255)
+  // Campaign-level template variables (promo copy, CTA link, image URLs…).
+  // Per-recipient ones (customer name, unsubscribe link) are merged at send.
+  variables         Json?
+  // Shown as the sender name so the inbox reads "Luxe Nails", not "Beauta".
+  // Snapshotted here because the salon can rename itself afterwards.
+  fromName          String? @map("from_name") @db.VarChar(255)
+  replyTo           String? @map("reply_to")
+
+  status   MarketingCampaignStatus @default(DRAFT)
+  // The filter the audience was resolved from, kept so the salon can see who a
+  // past campaign went to without re-running a query that would now answer
+  // differently.
+  audience Json?
+
+  scheduledAt DateTime? @map("scheduled_at") @db.Timestamptz(6)
+  startedAt   DateTime? @map("started_at") @db.Timestamptz(6)
+  finishedAt  DateTime? @map("finished_at") @db.Timestamptz(6)
+
+  // Denormalised so the campaigns list never aggregates the recipient table.
+  totalCount  Int @default(0) @map("total_count")
+  sentCount   Int @default(0) @map("sent_count")
+  failedCount Int @default(0) @map("failed_count")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  organization Organization                 @relation(fields: [organizationId], references: [id])
+  template     MarketingTemplate?           @relation(fields: [templateId], references: [id])
+  recipients   MarketingCampaignRecipient[]
+
+  @@index([organizationId, status, createdAt])
+  @@map("marketing_campaign")
+}
+
+// The audience, frozen row by row the moment a send starts, and the per-address
+// outcome afterwards.
+//
+// This table is what makes a send safe to resume: the unique on
+// (campaignId, customerId) means a retry after a crash — or a double-clicked
+// Send — can never mail the same customer twice, and the remaining work is
+// always "the PENDING rows of this campaign".
+model MarketingCampaignRecipient {
+  id         Int    @id @default(autoincrement())
+  campaignId Int    @map("campaign_id")
+  customerId Int    @map("customer_id")
+  email      String
+
+  status           MarketingRecipientStatus @default(PENDING)
+  mailjetMessageId String?                  @map("mailjet_message_id")
+  sentAt           DateTime?                @map("sent_at") @db.Timestamptz(6)
+  error            String?                  @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  campaign MarketingCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  customer Customer          @relation(fields: [customerId], references: [id])
+
+  @@unique([campaignId, customerId])
+  @@index([campaignId, status])
+  @@index([mailjetMessageId])
+  @@map("marketing_campaign_recipient")
+}
+
+// Whether a customer still accepts marketing, kept off the Customer row the way
+// CustomerPoint is. `unsubscribeToken` is what the unsubscribe link carries, so
+// the URL never exposes a customer id and cannot be walked by incrementing it.
+//
+// Absence of a row means "not opted out" — consent is implied by the customer
+// giving the salon their email, and the opt-out is what we have to honour.
+model CustomerMarketingPreference {
+  id         Int @id @default(autoincrement())
+  customerId Int @unique @map("customer_id")
+
+  optedOutAt       DateTime? @map("opted_out_at") @db.Timestamptz(6)
+  unsubscribeToken String    @unique @map("unsubscribe_token")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@map("customer_marketing_preference")
+}
+
+// Anonymous device-level tracking. beauta-org-app mints a UUID on first visit,
+// stores it in localStorage, and reuses it forever. One row is recorded each
+// time a human passes the hidden Turnstile check on the sign-up page.
+model SignupVisit {
+  id        Int      @id @default(autoincrement())
+  deviceId  String   @map("device_id")
+  ipAddress String?  @map("ip_address")
+  userAgent String?  @map("user_agent") @db.Text
+  language  String?  @db.VarChar(16)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([deviceId])
+  @@index([createdAt])
+  @@map("signup_visit")
+}
+
+// How a phone call to the AI receptionist ended. NO_ACTION covers the caller
+// who rang to ask a question, or hung up partway.
+enum VoiceCallOutcome {
+  BOOKED
+  WAITLISTED
+  MESSAGE
+  NO_ACTION
+}
+
+// One phone call answered by beauta-voice.
+//
+// Written by beauta-voice, not beauta-api: a call is a live socket and the
+// transcript grows turn by turn while it is open. The salon needs to be able to
+// read back what its receptionist actually said — an AI taking bookings that
+// nobody can audit is not something a salon owner should have to trust blind.
+model VoiceCall {
+  id             Int     @id @default(autoincrement()) @map("id")
+  organizationId Int     @map("organization_id")
+  // Twilio's id for the call. Unique so a reconnecting socket updates the same
+  // row rather than starting a second one.
+  callSid        String  @unique @map("call_sid")
+  fromNumber     String  @map("from_number")
+  toNumber       String? @map("to_number")
+  // On a forwarded call, the salon number the customer actually dialled.
+  forwardedFrom  String? @map("forwarded_from")
+
+  startedAt DateTime  @default(now()) @map("started_at") @db.Timestamptz(6)
+  endedAt   DateTime? @map("ended_at") @db.Timestamptz(6)
+
+  outcome VoiceCallOutcome @default(NO_ACTION)
+
+  // Every turn in order: { role, text, at }. One column rather than a child
+  // table because a transcript is only ever read whole, with its call.
+  transcript   Json  @default("[]")
+  // What the receptionist had pinned down when the call ended: service, date,
+  // time, name. Kept even when nothing was booked — a call that fell over at
+  // "which day?" is exactly the one worth looking at.
+  bookingState Json? @map("booking_state")
+
+  // Public ids rather than foreign keys: beauta-voice books over the HTTP API
+  // and gets these back, never the row ids.
+  bookingPublicId  String? @map("booking_public_id")
+  waitlistPublicId String? @map("waitlist_public_id")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, startedAt])
+  @@map("voice_call")
+}

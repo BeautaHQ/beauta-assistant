@@ -1,0 +1,31 @@
+{
+  "name": "beauta-voice",
+  "version": "1.0.0",
+  "description": "Beauta's phone line: Twilio calls arrive here, an AI receptionist answers. Separate from beauta-api because a call is a long-lived socket and beauta-api deploys drop them.",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p .",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit -p .",
+    "prisma:sync": "node scripts/sync-schema.mjs && prisma generate",
+    "prisma:generate": "prisma generate"
+  },
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@fastify/formbody": "^9.0.0",
+    "@fastify/websocket": "^11.0.2",
+    "@prisma/client": "^6.19.3",
+    "fastify": "^5.12.1",
+    "openai": "^6.14.0",
+    "twilio": "^5.3.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0",
+    "@types/ws": "^8.18.1",
+    "prisma": "^6.19.3",
+    "tsx": "^4.23.13",
+    "typescript": "^5.7.2"
+  }
+}
