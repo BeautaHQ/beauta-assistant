@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 
@@ -32,6 +34,12 @@ export const conversationRelayRouter = (app: FastifyInstance) => {
       name: "the salon",
       timezone: "Australia/Sydney",
     });
+    /*
+     * Ours, minted the moment the socket opens. Twilio's call id arrives a beat
+     * later on the setup message and is kept alongside, as a link back to their
+     * records rather than as the identity of the conversation.
+     */
+    const conversationId = `cnv_${randomUUID()}`;
     let callSid = "unknown";
 
     /*
@@ -129,7 +137,8 @@ export const conversationRelayRouter = (app: FastifyInstance) => {
               message.type === "setup" ? (message.to ?? null) : null,
               message.type === "setup" ? (message.forwardedFrom ?? null) : null,
             );
-            session = newSession(callSid, message.from, salon);
+            session = newSession(conversationId, message.from, salon, "PHONE");
+            session.callSid = message.type === "setup" ? message.callSid : null;
             session.toNumber = message.to ?? null;
             session.forwardedFrom = message.forwardedFrom ?? null;
             request.log.info(
@@ -145,8 +154,8 @@ export const conversationRelayRouter = (app: FastifyInstance) => {
 
             await openCall(session).catch((error: Error) =>
               request.log.error(
-                { event: "call_log_failed", callSid, errorMessage: error.message },
-                "Could not open the call record",
+                { event: "call_log_failed", callSid, conversationId, errorMessage: error.message },
+                "Could not open the conversation record",
               ),
             );
 

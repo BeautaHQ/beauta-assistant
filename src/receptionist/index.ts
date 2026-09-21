@@ -23,6 +23,7 @@ export type Turn =
 
 export type Intent =
   | "FAQ"
+  | "CLARIFY"
   | "CHECK_AVAILABILITY"
   | "ASK_SLOT"
   | "ASK_INFO"
@@ -138,15 +139,28 @@ export const streamReply = async (
          * anything reaches the diary.
          */
         if (intent === "REVIEW") session.reviewed = true;
+        /*
+         * Whether the turn talked about a day whose times it never looked up.
+         *
+         * Judged on what happened, not on the label. A turn that reads the
+         * diary and then offers what it found is doing two jobs but can only
+         * carry one name, and the model names it after what it is saying — so
+         * a diary-reading turn often comes back labelled ASK_SLOT. Keying the
+         * check to CHECK_AVAILABILITY alone let exactly the stall it exists to
+         * catch go past unnoticed.
+         */
         const readTheDiary = session.toolsThisTurn.some(
           (used) => used.name === "check_availability",
         );
+        const aboutTimes = intent === "CHECK_AVAILABILITY" || intent === "ASK_SLOT";
+        const haveTimes =
+          session.offered !== null && session.offered.date === session.booking.date;
 
         return {
           say: parsed.say ?? spoken.value,
           intent,
           endCall: parsed.endCall === true,
-          brokePromise: intent === "CHECK_AVAILABILITY" && !readTheDiary,
+          brokePromise: aboutTimes && !readTheDiary && !haveTimes,
         };
       } catch {
         // Cut short by max_tokens: what was streamed is what the caller heard,

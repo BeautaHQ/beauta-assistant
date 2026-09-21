@@ -1,3 +1,4 @@
+import cors from "@fastify/cors";
 import formbody from "@fastify/formbody";
 import swagger from "@fastify/swagger";
 import swaggerUI from "@fastify/swagger-ui";
@@ -5,7 +6,8 @@ import websocket from "@fastify/websocket";
 import Fastify from "fastify";
 
 import {
-  ENABLE_SIMULATOR,
+  CHAT_ORIGINS,
+  ENABLE_CHAT_API,
   OPENAI_API_KEY,
   PORT,
   PUBLIC_URL,
@@ -14,7 +16,7 @@ import {
 } from "./config";
 import { incomingCallRouter } from "./routes/IncomingCallRoute";
 import { conversationRelayRouter } from "./routes/ConversationRelayRoute";
-import { simulatorRouter } from "./routes/SimulatorRoute";
+import { conversationRouter } from "./routes/ConversationRoute";
 
 /**
  * Beauta's phone line.
@@ -38,6 +40,15 @@ export const buildServer = () => {
    * Without this Fastify answers 415 before the handler runs, and every call
    * fails — invisibly, because the caller just hears nothing.
    */
+  /*
+   * Only the sites named in CHAT_ORIGINS. Twilio's webhooks are server to
+   * server and need none of this; the chat widget is the only thing here a
+   * browser ever calls.
+   */
+  if (CHAT_ORIGINS.length > 0) {
+    app.register(cors, { origin: CHAT_ORIGINS, methods: ["GET", "POST", "DELETE"] });
+  }
+
   app.register(formbody);
   app.register(websocket);
 
@@ -69,13 +80,12 @@ export const buildServer = () => {
   });
 
   /*
-   * Registered only when asked for. It drives the same receptionist as a real
-   * call, so it books into a real diary — which is exactly what makes it worth
-   * having, and exactly why it must not be reachable beside a live salon.
+   * Registered only when asked for. These drive the same receptionist a caller
+   * reaches, so they book into a real diary.
    */
-  if (ENABLE_SIMULATOR) {
-    app.register(async (instance) => simulatorRouter(instance), {
-      prefix: "/simulator",
+  if (ENABLE_CHAT_API) {
+    app.register(async (instance) => conversationRouter(instance), {
+      prefix: "/api/v1/conversations",
     });
   }
 
@@ -108,7 +118,7 @@ if (require.main === module) {
     .listen({ port: PORT, host: "0.0.0.0" })
     .then(() =>
       app.log.info(
-        { event: "voice_started", port: PORT, PUBLIC_URL, simulator: ENABLE_SIMULATOR },
+        { event: "voice_started", port: PORT, PUBLIC_URL, chatApi: ENABLE_CHAT_API },
         `Swagger on ${PUBLIC_URL || `http://localhost:${PORT}`}/api-docs`,
       ),
     )

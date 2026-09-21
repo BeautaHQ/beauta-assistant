@@ -1,14 +1,17 @@
 /**
- * Free times, cut down to the ones worth saying out loud.
+ * Free times, grouped by part of the day.
  *
- * The diary runs on ten-minute steps, so a quiet day comes back as sixty
- * times. Read to a caller that is absurd, and handed to a model whole it was
- * worse than absurd: it offered "nine, ten past, twenty past" off the top of
- * the list and then claimed two o'clock was taken while two o'clock sat in the
- * same list it was holding.
+ * Every one of them. The diary runs on ten-minute steps, so a quiet day is
+ * fifty-odd times, and an earlier version cut that to the half hours before
+ * handing it over. That was a crutch for a weaker model, which had read nine
+ * times and told the caller three o'clock was not among them; it also meant the
+ * receptionist could not see 13:20 at all, and would tell a caller who asked
+ * for it that it did not exist.
  *
- * So the half hours are what gets offered. The full list still decides what is
- * bookable — a caller who asks for ten past two gets ten past two.
+ * So the whole list goes over, and choosing two or three to say out loud is the
+ * model's job. The grouping is the one thing kept, because "the afternoon is
+ * gone until five" is the sentence a caller actually wants, and it is easier to
+ * reach from times already sorted into afternoons than from a flat list.
  */
 export interface Offer {
   morning: string[];
@@ -19,10 +22,8 @@ export interface Offer {
 const hourOf = (slot: string) => Number(slot.slice(0, 2));
 
 export const offerable = (slots: string[]): Offer => {
-  const rounded = slots.filter((s) => s.endsWith(":00") || s.endsWith(":30"));
-  const usable = rounded.length > 0 ? rounded : slots;
   const between = (from: number, to: number) =>
-    usable.filter((s) => hourOf(s) >= from && hourOf(s) < to);
+    slots.filter((s) => hourOf(s) >= from && hourOf(s) < to);
 
   return {
     morning: between(0, 12),
@@ -36,9 +37,11 @@ export const describeOffer = (slots: string[]): string => {
   if (slots.length === 0) return "none, that day is full";
   const offer = offerable(slots);
   const parts = [
-    offer.morning.length > 0 ? `morning ${offer.morning.join(" ")}` : null,
-    offer.afternoon.length > 0 ? `afternoon ${offer.afternoon.join(" ")}` : null,
-    offer.evening.length > 0 ? `evening ${offer.evening.join(" ")}` : null,
-  ].filter(Boolean);
-  return `${parts.join(" | ")} (any ten-minute time in between is bookable too)`;
+    offer.morning.length > 0 ? `morning ${offer.morning.join(" ")}` : "morning none",
+    offer.afternoon.length > 0
+      ? `afternoon ${offer.afternoon.join(" ")}`
+      : "afternoon none",
+    offer.evening.length > 0 ? `evening ${offer.evening.join(" ")}` : "evening none",
+  ];
+  return parts.join(" | ");
 };

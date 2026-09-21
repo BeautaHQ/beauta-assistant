@@ -75,16 +75,24 @@ export const salonForCall = async (
   return { salon: await configuredSalon(), matchedOn: "fallback" };
 };
 
-/** The salon this instance is set up for, when the number tells us nothing. */
-const configuredSalon = async (): Promise<Salon> => {
+/**
+ * One salon, by id.
+ *
+ * What a chat uses: there is no number to work backwards from, but the app
+ * that opened the conversation already knows whose salon it is.
+ */
+export const salonById = async (organizationId: number): Promise<Salon> => {
   const organization = await prisma.organization.findUnique({
-    where: { id: DEFAULT_ORGANIZATION_ID },
+    where: { id: organizationId },
     select: { id: true, name: true, timezone: true },
   });
 
   return {
-    organizationId: DEFAULT_ORGANIZATION_ID,
+    organizationId,
     name: organization?.name ?? "the salon",
     timezone: organization?.timezone ?? DEFAULT_TIMEZONE,
   };
 };
+
+/** The salon this instance is set up for, when nothing else names one. */
+const configuredSalon = () => salonById(DEFAULT_ORGANIZATION_ID);

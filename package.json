@@ -10,11 +10,15 @@
     "typecheck": "tsc --noEmit -p .",
     "prisma:sync": "node scripts/sync-schema.mjs && prisma generate",
     "prisma:generate": "prisma generate",
-    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "migrate": "echo 'beauta-api owns this schema. Migrate there, then run npm run prisma:sync here.' && exit 1",
+    "prisma:migrate": "echo 'beauta-api owns this schema. Migrate there, then run npm run prisma:sync here.' && exit 1",
+    "db:push": "echo 'beauta-api owns this schema. Migrate there, then run npm run prisma:sync here.' && exit 1"
   },
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@fastify/cors": "^11.3.0",
     "@fastify/formbody": "^9.0.0",
     "@fastify/swagger": "^9.6.1",
     "@fastify/swagger-ui": "^5.2.3",

@@ -9,8 +9,10 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Deliberately points nowhere. See scripts/sync-schema.mjs.
+  directUrl = env("BEAUTA_VOICE_MUST_NOT_MIGRATE")
 }
 
 enum RecurringType {
@@ -346,7 +348,7 @@ model Organization {
   userRequests               UserRequest[]
   marketingTemplates         MarketingTemplate[]
   marketingCampaigns         MarketingCampaign[]
-  voiceCalls                 VoiceCall[]
+  conversations              Conversation[]
 
   @@map("organization")
 }
@@ -441,7 +443,12 @@ model Booking {
   id                   Int                       @id @default(autoincrement()) @map("id")
   startTime            DateTime                  @map("start_time") @db.Timestamptz(6)
   endTime              DateTime                  @map("end_time") @db.Timestamptz(6)
-  status               String                    @default("PENDING")
+  // SCHEDULED, COMPLETED, CANCELED or NO_SHOW — the four BookingResponseSchema
+  // admits. The default used to be PENDING, which nothing else understood: any
+  // caller who left `status` out of a public booking created a row that made
+  // the salon's calendar fail to serialize for that whole day. Whether payment
+  // is outstanding is bookingPaymentStatus's business, not this column's.
+  status               String                    @default("SCHEDULED")
   createdAt            DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt            DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
   organizationId       Int                       @map("organization_id")
@@ -1810,42 +1817,58 @@ model SignupVisit {
   @@map("signup_visit")
 }
 
-// How a phone call to the AI receptionist ended. NO_ACTION covers the caller
-// who rang to ask a question, or hung up partway.
-enum VoiceCallOutcome {
+// How a conversation with the AI receptionist ended. NO_ACTION covers the
+// person who only had a question, or who went away partway.
+enum ConversationOutcome {
   BOOKED
   WAITLISTED
   MESSAGE
   NO_ACTION
 }
 
-// One phone call answered by beauta-voice.
+// How the customer reached the receptionist.
+enum ConversationChannel {
+  PHONE
+  CHAT
+}
+
+// One conversation with the AI receptionist.
 //
-// Written by beauta-voice, not beauta-api: a call is a live socket and the
+// Written by beauta-voice, not beauta-api: a conversation is long-lived and its
 // transcript grows turn by turn while it is open. The salon needs to be able to
 // read back what its receptionist actually said — an AI taking bookings that
 // nobody can audit is not something a salon owner should have to trust blind.
-model VoiceCall {
-  id             Int     @id @default(autoincrement()) @map("id")
-  organizationId Int     @map("organization_id")
-  // Twilio's id for the call. Unique so a reconnecting socket updates the same
-  // row rather than starting a second one.
-  callSid        String  @unique @map("call_sid")
-  fromNumber     String  @map("from_number")
-  toNumber       String? @map("to_number")
+//
+// Identified by `publicId`, which this service mints, rather than by Twilio's
+// call id. A phone call is one channel this can arrive on and chat is another;
+// hanging the identity on the phone system's id would leave every chat needing
+// a fake one.
+model Conversation {
+  id             Int                 @id @default(autoincrement()) @map("id")
+  organizationId Int                 @map("organization_id")
+  publicId       String              @unique @map("public_id")
+  channel        ConversationChannel @default(PHONE)
+
+  // Twilio's id for the call, when it was one. A link back to their records,
+  // nothing more. Unique so a reconnecting socket finds the same row.
+  callSid       String? @unique @map("call_sid")
+  // Whoever is on the other end: a phone number, or whatever identifies a chat.
+  fromNumber    String  @map("from_number")
+  toNumber      String? @map("to_number")
   // On a forwarded call, the salon number the customer actually dialled.
-  forwardedFrom  String? @map("forwarded_from")
+  forwardedFrom String? @map("forwarded_from")
 
   startedAt DateTime  @default(now()) @map("started_at") @db.Timestamptz(6)
   endedAt   DateTime? @map("ended_at") @db.Timestamptz(6)
 
-  outcome VoiceCallOutcome @default(NO_ACTION)
+  outcome ConversationOutcome @default(NO_ACTION)
 
-  // Every turn in order: { role, text, at }. One column rather than a child
-  // table because a transcript is only ever read whole, with its call.
+  // Every turn in order: { role, text, at, intent }. One column rather than a
+  // child table because a transcript is only ever read whole, with its
+  // conversation.
   transcript   Json  @default("[]")
-  // What the receptionist had pinned down when the call ended: service, date,
-  // time, name. Kept even when nothing was booked — a call that fell over at
+  // What the receptionist had pinned down at the end: service, date, time,
+  // name. Kept even when nothing was booked — a conversation that fell over at
   // "which day?" is exactly the one worth looking at.
   bookingState Json? @map("booking_state")
 
@@ -1860,5 +1883,5 @@ model VoiceCall {
   organization Organization @relation(fields: [organizationId], references: [id])
 
   @@index([organizationId, startedAt])
-  @@map("voice_call")
+  @@map("conversation")
 }

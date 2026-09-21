@@ -123,6 +123,8 @@ export const createBooking = (input: {
   addonIds: number[];
   startTime: string;
   customerNotes?: string | null;
+  /** Which channel took the booking, so the salon can tell it from the website. */
+  source: "AI_CALL" | "AI_CHAT";
 }) =>
   call<{ bookingPublicId: string; startTime: string; checkoutUrl: string | null }>(
     `/api/v1/bookings/public/organization/${input.organizationId}`,

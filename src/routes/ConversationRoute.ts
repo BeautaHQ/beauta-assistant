@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { Type } from "@sinclair/typebox";
 import type { FastifyInstance } from "fastify";
 
@@ -7,10 +9,10 @@ import { newSession, record, type CallSession } from "../call/session";
 import { GREETING } from "../config";
 import { streamReply, type Turn } from "../receptionist";
 import { getCatalogue } from "../salon/catalogue";
-import { salonForCall } from "../salon/lookup";
+import { salonById, salonForCall } from "../salon/lookup";
 
 /**
- * The phone line, without the phone.
+ * A conversation over HTTP: text in, text out.
  *
  * ConversationRelay hands us text and speaks our text back, so a call is
  * already text in and text out — Twilio's half is speech, and none of the
@@ -43,19 +45,39 @@ const errorResponses = {
   404: Type.Object({ success: Type.Boolean(), message: Type.String() }),
 };
 
-export const simulatorRouter = (app: FastifyInstance) => {
-  app.post<{ Body: { from?: string; to?: string; forwardedFrom?: string } }>(
-    "/calls",
+export const conversationRouter = (app: FastifyInstance) => {
+  app.post<{
+    Body: {
+      channel?: "PHONE" | "CHAT";
+      from?: string;
+      to?: string;
+      forwardedFrom?: string;
+      organizationId?: number;
+    };
+  }>(
+    "",
     {
       schema: {
-        tags: ["Simulator"],
-        summary: "Start a call",
+        tags: ["Conversations"],
+        summary: "Start a conversation",
         description:
-          "Stands in for Twilio's setup message. `to` or `forwardedFrom` decides which salon answers, exactly as the dialled number does on a real call; leave them out to get the salon in ORGANIZATION_ID. Returns the greeting Twilio would speak before the caller says anything.",
-        operationId: "simulatorStartCall",
+          "A phone call and a chat run the same conversation: Twilio only turns speech into text at one end and text back into speech at the other. So this starts either, and `channel` is the only thing that differs. On PHONE the caller's number is known from the start; on CHAT it is not, so the receptionist will ask for it before booking. `to` or `forwardedFrom` decides which salon answers, exactly as the dialled number does on a real call; a chat can name `organizationId` instead.",
+        operationId: "conversationStartCall",
         body: Type.Object({
+          channel: Type.Optional(
+            Type.Union([Type.Literal("PHONE"), Type.Literal("CHAT")], {
+              description: "PHONE knows their number already; CHAT has to ask",
+              default: "PHONE",
+            }),
+          ),
+          organizationId: Type.Optional(
+            Type.Integer({ description: "Which salon, when no number identifies one" }),
+          ),
           from: Type.Optional(
-            Type.String({ description: "The caller's number", default: "+61400111222" }),
+            Type.String({
+              description: "The caller's number on PHONE; ignored on CHAT",
+              default: "+61400111222",
+            }),
           ),
           to: Type.Optional(
             Type.String({ description: "The number they rang, e.g. +641111111" }),
@@ -66,8 +88,9 @@ export const simulatorRouter = (app: FastifyInstance) => {
         }),
         response: {
           200: Type.Object({
-            callSid: Type.String(),
+            conversationId: Type.String(),
             greeting: Type.String(),
+            channel: Type.String(),
             salon: Type.Object({
               organizationId: Type.Integer(),
               name: Type.String(),
@@ -85,24 +108,30 @@ export const simulatorRouter = (app: FastifyInstance) => {
     async (request, reply) => {
       sweep();
 
-      const from = request.body?.from ?? "+61400111222";
-      const { salon, matchedOn } = await salonForCall(
-        request.body?.to ?? null,
-        request.body?.forwardedFrom ?? null,
-      );
+      const channel = request.body?.channel ?? "PHONE";
+      // A chat has no caller ID, so nothing is assumed about who they are.
+      const from = channel === "CHAT" ? "" : (request.body?.from ?? "+61400111222");
 
-      const callSid = `SIM_${Date.now()}_${Math.floor(Math.random() * 9999)}`;
-      const session = newSession(callSid, from, salon);
+      const { salon, matchedOn } = request.body?.organizationId
+        ? { salon: await salonById(request.body.organizationId), matchedOn: "organizationId" }
+        : await salonForCall(
+            request.body?.to ?? null,
+            request.body?.forwardedFrom ?? null,
+          );
+
+      const conversationId = `cnv_${randomUUID()}`;
+      const session = newSession(conversationId, from, salon, channel);
       session.toNumber = request.body?.to ?? null;
       session.forwardedFrom = request.body?.forwardedFrom ?? null;
       session.catalogue = await getCatalogue(salon.organizationId).catch(() => null);
 
       await openCall(session);
-      calls.set(callSid, { session, history: [], at: Date.now() });
+      calls.set(conversationId, { session, history: [], at: Date.now() });
 
       return reply.send({
-        callSid,
-        greeting: GREETING,
+        conversationId,
+        channel,
+        greeting: openingLine(channel, salon.name),
         salon,
         matchedOn,
         services: session.catalogue?.serviceIds.size ?? 0,
@@ -110,16 +139,16 @@ export const simulatorRouter = (app: FastifyInstance) => {
     },
   );
 
-  app.post<{ Params: { callSid: string }; Body: { text: string } }>(
-    "/calls/:callSid/say",
+  app.post<{ Params: { conversationId: string }; Body: { text: string } }>(
+    "/:conversationId/say",
     {
       schema: {
-        tags: ["Simulator"],
+        tags: ["Conversations"],
         summary: "Say something to the receptionist",
         description:
           "One thing the caller says, and what comes back. `tools` shows what was actually run against the diary — on a real call that is invisible, and it is where the interesting failures are. `booking` is what has been pinned down so far; a field stays null until the caller has genuinely said it.",
-        operationId: "simulatorSay",
-        params: Type.Object({ callSid: Type.String() }),
+        operationId: "conversationSay",
+        params: Type.Object({ conversationId: Type.String() }),
         body: Type.Object({
           text: Type.String({
             minLength: 1,
@@ -132,11 +161,11 @@ export const simulatorRouter = (app: FastifyInstance) => {
             say: Type.String({ description: "What Twilio would speak aloud" }),
             intent: Type.String({
               description:
-                "What the turn was for: FAQ, CHECK_AVAILABILITY, ASK_SLOT, ASK_INFO, REVIEW, CONFIRM, OTHER. Nothing books before REVIEW has happened.",
+                "What the turn was for: FAQ, CLARIFY, CHECK_AVAILABILITY, ASK_SLOT, ASK_INFO, REVIEW, CONFIRM, OTHER. Nothing books before REVIEW has happened.",
             }),
             brokePromise: Type.Boolean({
               description:
-                "True when the turn said it was reading the diary and then did not — the caller was left in silence",
+                "True when the turn talked about times on a day whose availability it never looked up — the caller was left in silence, or told something unchecked",
             }),
             endCall: Type.Boolean({ description: "Whether it hung up after saying that" }),
             booking: Type.Any({ description: "The booking as it now stands" }),
@@ -144,18 +173,16 @@ export const simulatorRouter = (app: FastifyInstance) => {
               description: "What it still needs, in the order it will ask",
             }),
             /*
-             * Strings, not objects. Fastify's response schema doubles as the
-             * serializer, and it would not write these as free-form objects —
-             * the field came back as an empty list while the server log showed
-             * the tools running perfectly well. Arguments and results are
-             * arbitrary JSON, so they are handed over as JSON text, which
-             * always survives the trip.
+             * Objects, so the trace reads as JSON rather than as a wall of
+             * escaped quotes. `additionalProperties` is what lets arbitrary
+             * tool arguments and results through: Fastify's response schema is
+             * also its serializer, and it writes only what the schema admits.
              */
             tools: Type.Array(
               Type.Object({
                 name: Type.String(),
-                args: Type.String({ description: "JSON the model passed in" }),
-                result: Type.String({ description: "JSON the tool answered with" }),
+                args: Type.Object({}, { additionalProperties: true }),
+                result: Type.Object({}, { additionalProperties: true }),
               }),
             ),
             bookingPublicId: Type.Union([Type.String(), Type.Null()]),
@@ -167,7 +194,7 @@ export const simulatorRouter = (app: FastifyInstance) => {
       },
     },
     async (request, reply) => {
-      const call = calls.get(request.params.callSid);
+      const call = calls.get(request.params.conversationId);
       if (!call) {
         return reply
           .status(404)
@@ -219,8 +246,8 @@ export const simulatorRouter = (app: FastifyInstance) => {
         missing: missingFields(session.booking),
         tools: session.toolsThisTurn.map((used) => ({
           name: used.name,
-          args: JSON.stringify(used.args),
-          result: used.result,
+          args: used.args as Record<string, unknown>,
+          result: asObject(used.result),
         })),
         bookingPublicId: session.bookingPublicId,
         waitlisted: session.waitlisted,
@@ -229,17 +256,17 @@ export const simulatorRouter = (app: FastifyInstance) => {
     },
   );
 
-  app.get<{ Params: { callSid: string } }>(
-    "/calls/:callSid",
+  app.get<{ Params: { conversationId: string } }>(
+    "/:conversationId",
     {
       schema: {
-        tags: ["Simulator"],
+        tags: ["Conversations"],
         summary: "Where the call is up to",
-        operationId: "simulatorGetCall",
-        params: Type.Object({ callSid: Type.String() }),
+        operationId: "conversationGetCall",
+        params: Type.Object({ conversationId: Type.String() }),
         response: {
           200: Type.Object({
-            callSid: Type.String(),
+            conversationId: Type.String(),
             salon: Type.Any(),
             booking: Type.Any(),
             bookingPublicId: Type.Union([Type.String(), Type.Null()]),
@@ -257,14 +284,14 @@ export const simulatorRouter = (app: FastifyInstance) => {
       },
     },
     async (request, reply) => {
-      const call = calls.get(request.params.callSid);
+      const call = calls.get(request.params.conversationId);
       if (!call) {
         return reply.status(404).send({ success: false, message: "No such call." });
       }
 
       const { session } = call;
       return reply.send({
-        callSid: session.callSid,
+        conversationId: session.conversationId,
         salon: session.salon,
         booking: session.booking,
         bookingPublicId: session.bookingPublicId,
@@ -274,19 +301,19 @@ export const simulatorRouter = (app: FastifyInstance) => {
     },
   );
 
-  app.delete<{ Params: { callSid: string } }>(
-    "/calls/:callSid",
+  app.delete<{ Params: { conversationId: string } }>(
+    "/:conversationId",
     {
       schema: {
-        tags: ["Simulator"],
+        tags: ["Conversations"],
         summary: "Hang up",
         description:
           "Finishes the voice_call row the same way the socket closing does. Worth doing rather than abandoning the call, because the row is only completed on hang-up.",
-        operationId: "simulatorHangUp",
-        params: Type.Object({ callSid: Type.String() }),
+        operationId: "conversationHangUp",
+        params: Type.Object({ conversationId: Type.String() }),
         response: {
           200: Type.Object({
-            callSid: Type.String(),
+            conversationId: Type.String(),
             outcome: Type.String(),
             turns: Type.Integer(),
           }),
@@ -295,16 +322,16 @@ export const simulatorRouter = (app: FastifyInstance) => {
       },
     },
     async (request, reply) => {
-      const call = calls.get(request.params.callSid);
+      const call = calls.get(request.params.conversationId);
       if (!call) {
         return reply.status(404).send({ success: false, message: "No such call." });
       }
 
       await closeCall(call.session);
-      calls.delete(request.params.callSid);
+      calls.delete(request.params.conversationId);
 
       return reply.send({
-        callSid: call.session.callSid,
+        conversationId: call.session.conversationId,
         outcome: call.session.bookingPublicId
           ? "BOOKED"
           : call.session.waitlisted
@@ -315,3 +342,29 @@ export const simulatorRouter = (app: FastifyInstance) => {
     },
   );
 };
+
+/** Tool results travel as JSON text; the trace shows them as what they are. */
+const asObject = (value: string): Record<string, unknown> => {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : { value: parsed };
+  } catch {
+    return { raw: value };
+  }
+};
+
+/**
+ * The first thing said, before anyone has typed anything.
+ *
+ * A phone call gets the configured GREETING, because Twilio speaks that one
+ * aloud from the TwiML before this service is even connected, and the two must
+ * match or the caller hears the salon introduce itself twice.
+ *
+ * Chat has no such constraint, and a chat window opens on a page that already
+ * says whose salon it is — so it can say who is answering and what it is good
+ * for, which "you've reached the salon" does not.
+ */
+const openingLine = (channel: "PHONE" | "CHAT", salonName: string) =>
+  channel === "CHAT"
+    ? `Hi, I'm ${salonName}'s assistant. Ask me anything about our services, or tell me what you'd like booked and I'll take care of it.`
+    : GREETING;

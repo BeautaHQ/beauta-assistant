@@ -21,7 +21,17 @@ export interface TranscriptLine {
  * other's slot.
  */
 export interface CallSession {
-  callSid: string;
+  /**
+   * Ours, and the identity of the conversation.
+   *
+   * Not Twilio's call id: a phone call is one channel this can arrive on and
+   * chat is another, and hanging the identity on the phone system would leave
+   * every chat needing a fake one.
+   */
+  conversationId: string;
+  channel: "PHONE" | "CHAT";
+  /** Twilio's id, when there was a call. A link back to their records. */
+  callSid: string | null;
   /** Worked out from the number dialled, once, when the call connects. */
   salon: Salon;
   /** Caller ID from Twilio. Never asked for, never taken from the model. */
@@ -63,17 +73,22 @@ export interface CallSession {
 }
 
 export const newSession = (
-  callSid: string,
+  conversationId: string,
   phone: string,
   salon: Salon,
+  channel: CallSession["channel"] = "PHONE",
 ): CallSession => ({
-  callSid,
+  conversationId,
+  channel,
+  callSid: null,
   salon,
   phone,
   toNumber: null,
   forwardedFrom: null,
   catalogue: null,
-  booking: emptyBooking(),
+  // Caller ID is the one thing a call knows before a word is said. A chat
+  // starts with nothing and has to ask.
+  booking: { ...emptyBooking(), phone: channel === "PHONE" ? phone : null },
   offered: null,
   reviewed: false,
   bookingPublicId: null,

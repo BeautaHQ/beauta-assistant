@@ -56,7 +56,7 @@ if (lines.length === 0) {
 const run = async () => {
   const { salon, matchedOn } = await salonForCall(process.env.VOICE_TO ?? null, null);
   console.log(`SALON: ${salon.name} (org ${salon.organizationId}, ${salon.timezone}) matched on ${matchedOn}`);
-  const session = newSession(`DEV_${Date.now()}`, "+61400111222", salon);
+  const session = newSession(`cnv_dev_${Date.now()}`, "+61400111222", salon, "PHONE");
   session.toNumber = process.env.VOICE_TO ?? null;
   session.catalogue = await getCatalogue(salon.organizationId);
   await openCall(session);
@@ -88,7 +88,7 @@ const run = async () => {
 
   console.log("");
   console.log("FINAL STATE:", JSON.stringify(session.booking));
-  console.log("voice_call row:", session.callSid);
+  console.log("conversation:", session.conversationId);
   console.log("booked:", session.bookingPublicId, "| waitlisted:", session.waitlisted);
 };
 

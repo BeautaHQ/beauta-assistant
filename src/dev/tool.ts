@@ -8,7 +8,7 @@ const [name, args] = process.argv.slice(2);
 
 const run = async () => {
   const { salon } = await salonForCall(process.env.VOICE_TO ?? null, null);
-  const session = newSession("DEV_TOOL", "+61400111222", salon);
+  const session = newSession("cnv_dev_tool", "+61400111222", salon, "PHONE");
   session.catalogue = await getCatalogue(salon.organizationId);
   console.log(await runTool(name!, JSON.parse(args || "{}"), session));
 };

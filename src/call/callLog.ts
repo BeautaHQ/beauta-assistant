@@ -12,16 +12,18 @@ import type { CallSession } from "./session";
  * phone is answered and is finished when it is put down.
  */
 export const openCall = async (session: CallSession): Promise<void> => {
-  await prisma.voiceCall.upsert({
-    where: { callSid: session.callSid },
+  await prisma.conversation.upsert({
+    where: { publicId: session.conversationId },
     create: {
       organizationId: session.salon.organizationId,
+      publicId: session.conversationId,
+      channel: session.channel,
       callSid: session.callSid,
       fromNumber: session.phone,
       toNumber: session.toNumber,
       forwardedFrom: session.forwardedFrom,
     },
-    // A reconnecting socket carries the same callSid; it is the same call.
+    // A reconnecting socket carries the same id; it is the same conversation.
     update: {},
   });
 };
@@ -33,8 +35,8 @@ const outcomeOf = (session: CallSession) => {
 };
 
 export const closeCall = async (session: CallSession): Promise<void> => {
-  await prisma.voiceCall.update({
-    where: { callSid: session.callSid },
+  await prisma.conversation.update({
+    where: { publicId: session.conversationId },
     data: {
       endedAt: new Date(),
       outcome: outcomeOf(session),

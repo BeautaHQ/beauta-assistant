@@ -17,6 +17,13 @@ export interface BookingState {
   time: string | null;
   firstName: string | null;
   lastName: string | null;
+  /**
+   * Where the salon rings them back.
+   *
+   * Part of the booking rather than of the channel, because that is what it is.
+   * A phone call happens to know it before a word is spoken; a chat has to ask.
+   */
+  phone: string | null;
   /** The caller has heard the whole thing read back and said yes. */
   confirmed: boolean;
 }
@@ -29,6 +36,7 @@ export const emptyBooking = (): BookingState => ({
   time: null,
   firstName: null,
   lastName: null,
+  phone: null,
   confirmed: false,
 });
 
@@ -44,6 +52,7 @@ export const BOOKING_SCHEMA = {
     "time",
     "firstName",
     "lastName",
+    "phone",
     "confirmed",
   ],
   properties: {
@@ -60,6 +69,10 @@ export const BOOKING_SCHEMA = {
     },
     firstName: { type: ["string", "null"] },
     lastName: { type: ["string", "null"] },
+    phone: {
+      type: ["string", "null"],
+      description: "The number the salon would ring them on",
+    },
     confirmed: {
       type: "boolean",
       description: "True only after the caller has said yes to the booking read back to them",
@@ -98,6 +111,7 @@ export const mergeBooking = (
     time: real(update.time) ?? current.time,
     firstName: real(update.firstName) ?? current.firstName,
     lastName: real(update.lastName) ?? current.lastName,
+    phone: real(update.phone) ?? current.phone,
     confirmed: update.confirmed ?? current.confirmed,
   };
 };
@@ -109,6 +123,7 @@ export const missingFields = (booking: BookingState): string[] => {
   if (!booking.date) gaps.push("date");
   if (!booking.time) gaps.push("time");
   if (!booking.firstName?.trim() || !booking.lastName?.trim()) gaps.push("full name");
+  if (!booking.phone?.trim()) gaps.push("phone number");
   if (!booking.confirmed) gaps.push("confirmation");
   return gaps;
 };

@@ -49,6 +49,7 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           time: { type: "string", description: "HH:mm, 24-hour" },
           firstName: { type: "string" },
           lastName: { type: "string" },
+          phone: { type: "string", description: "The number to ring them back on" },
           addonIds: { type: "array", items: { type: "number" } },
           callerConfirmed: {
             type: "boolean",
@@ -62,6 +63,7 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           "time",
           "firstName",
           "lastName",
+          "phone",
           "callerConfirmed",
         ],
       },
@@ -80,9 +82,10 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           date: { type: "string", description: "YYYY-MM-DD they want" },
           firstName: { type: "string" },
           lastName: { type: "string" },
+          phone: { type: "string" },
           addonIds: { type: "array", items: { type: "number" } },
         },
-        required: ["serviceId", "date", "firstName", "lastName"],
+        required: ["serviceId", "date", "firstName", "lastName", "phone"],
       },
     },
   },
@@ -174,8 +177,8 @@ const dispatch = async (
           ok: true,
           date: result.date,
           full: result.availableSlots.length === 0,
-          // The half hours, for offering. Anything on the ten-minute grid in
-          // between still books, so a caller who asks for one is not refused.
+          // Every free time, grouped by part of day. Which two or three to
+          // actually say is the model's call, not this function's.
           offer: offerable(result.availableSlots),
         });
       }
@@ -195,6 +198,7 @@ const dispatch = async (
           time: args.time,
           firstName: args.firstName,
           lastName: args.lastName,
+          phone: args.phone,
           addonIds: args.addonIds ?? [],
           confirmed: args.callerConfirmed === true,
         });
@@ -272,11 +276,15 @@ const dispatch = async (
           organizationId: session.salon.organizationId,
           firstName: wanted.firstName!,
           lastName: wanted.lastName!,
-          phone: session.phone,
+          phone: wanted.phone!,
           serviceId: wanted.serviceId!,
           addonIds: wanted.addonIds,
           startTime: `${wanted.date} ${wanted.time}`,
-          customerNotes: "Booked by phone with the AI receptionist.",
+          customerNotes:
+            session.channel === "CHAT"
+              ? "Booked in chat with the AI receptionist."
+              : "Booked by phone with the AI receptionist.",
+          source: session.channel === "CHAT" ? "AI_CHAT" : "AI_CALL",
         });
 
         session.booking = wanted;
@@ -299,11 +307,14 @@ const dispatch = async (
           organizationId: session.salon.organizationId,
           firstName: args.firstName,
           lastName: args.lastName,
-          phone: session.phone,
+          phone: args.phone ?? session.booking.phone ?? session.phone,
           serviceId: args.serviceId,
           addonIds: args.addonIds ?? [],
           slots: [{ startTime: `${args.date} 09:00`, endTime: `${args.date} 17:00` }],
-          notes: "Added by the AI receptionist over the phone.",
+          notes:
+            session.channel === "CHAT"
+              ? "Added by the AI receptionist in chat."
+              : "Added by the AI receptionist over the phone.",
         });
 
         session.waitlisted = true;
@@ -312,6 +323,7 @@ const dispatch = async (
           date: args.date,
           firstName: args.firstName,
           lastName: args.lastName,
+          phone: args.phone,
         });
 
         return JSON.stringify({ ok: true, waitlisted: true });
