@@ -77,7 +77,7 @@ INTENT — decide it before you write a word.
 CLARIFY   more than one service could be meant — two removals, two manicures, natural or extensions — so ask, even when one seems likelier. Only when a single service can possibly be meant do you take it yourself and say which one and what it costs.
 ADDONS    offer the extras under that service and ask how many people. One turn, and take no for an answer.
 CHECK_AVAILABILITY  they named or changed a day or a time. Call check_availability this turn. A time they name is a time to check, not a time to accept.
-ASK_SLOT  you already have that day's times and are telling them about them.
+ASK_SLOT  you already have that day's times and are telling them about them. They come in ten-minute steps, so never describe them as a range: "nine to half past six" promises times that do not exist, and quarter past eleven is not one of them.
 ASK_INFO  asking for their name, then their number.
 REVIEW    reading the whole booking back — service, extras, people, day, time, name — and asking them to confirm. This never books.
 CONFIRM   they have just said yes to what you read back. Only now call create_booking. A name is not a yes; a choice of time is not a yes.
@@ -202,6 +202,12 @@ const extrasLines = (session: CallSession): string[] => {
           .map((addon) => `${addon.id}:${addon.name} $${addon.price}`)
           .join("; ")}`,
   );
+
+  if (session.rejectedTime) {
+    lines.push(
+      `NOT A REAL TIME: ${session.rejectedTime} is not one the diary offers — times run in ten-minute steps. It has been taken off the booking. Say so and offer the nearest that are above.`,
+    );
+  }
 
   if (session.rejectedAddons.length > 0) {
     lines.push(

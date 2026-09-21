@@ -33,6 +33,28 @@ const CHAT_CANNOT_MANAGE =
  * not a constraint — the same extra appears under a dozen services, and a
  * model reading quickly attaches one to a service that never listed it.
  */
+/**
+ * Drop a time the diary never offered.
+ *
+ * The times run in ten-minute steps, and a caller saying "quarter past eleven"
+ * means a minute that does not exist. Told so in the prompt, the model still
+ * wrote it down and told the caller it was available; three turns later the
+ * booking guard refused it, by which point they had given their name and
+ * number for an appointment that was never on offer.
+ *
+ * Only when the times on hand are for the day being booked — otherwise there
+ * is nothing to check against yet.
+ */
+const pruneInvalidTime = (session: CallSession) => {
+  session.rejectedTime = null;
+  const { booking, offered } = session;
+  if (!booking.time || !offered || offered.date !== booking.date) return;
+  if (offered.slots.includes(booking.time)) return;
+
+  session.rejectedTime = booking.time;
+  booking.time = null;
+};
+
 const pruneStrayAddons = (session: CallSession) => {
   session.rejectedAddons = [];
 
@@ -180,6 +202,7 @@ export const streamReply = async (
         };
         session.booking = mergeBooking(session.booking, parsed.booking);
         pruneStrayAddons(session);
+        pruneInvalidTime(session);
 
         const intent = parsed.intent ?? "OTHER";
         session.lastIntent = intent;

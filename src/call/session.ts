@@ -64,6 +64,8 @@ export interface CallSession {
    * ones went and what is actually on offer.
    */
   rejectedAddons: string[];
+  /** A time the caller asked for that the diary never offered. */
+  rejectedTime: string | null;
   /**
    * An existing booking this caller has proved is theirs, when they rang to
    * change or cancel one. Null until the day and time they gave matched a
@@ -125,6 +127,7 @@ export const newSession = (
   offered: null,
   reviewed: false,
   rejectedAddons: [],
+  rejectedTime: null,
   managing: null,
   lastIntent: null,
   transferring: false,

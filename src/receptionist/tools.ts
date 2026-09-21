@@ -459,10 +459,15 @@ const dispatch = async (
           addonIds: wanted.addonIds,
           quantity: wanted.quantity ?? 1,
           startTime: `${wanted.date} ${wanted.time}`,
-          customerNotes:
-            session.channel === "CHAT"
-              ? "Booked in chat with the AI receptionist."
-              : "Booked by phone with the AI receptionist.",
+          /*
+           * No note. customerNotes is the customer's own field, shown to the
+           * salon as something they wrote — putting "booked with the AI
+           * receptionist" there puts words in their mouth and takes up the one
+           * place they had to say something real.
+           *
+           * Which channel took it is `source`, and the calendar already reads
+           * it out beside who scheduled the booking.
+           */
           source: session.channel === "CHAT" ? "AI_CHAT" : "AI_CALL",
         });
 
