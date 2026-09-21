@@ -50,21 +50,29 @@ export const salonForCall = async (
   to: string | null,
   forwardedFrom: string | null,
 ): Promise<{ salon: Salon; matchedOn: string }> => {
-  for (const [label, number] of [
-    ["forwardedFrom", forwardedFrom],
-    ["to", to],
-  ] as const) {
+  /*
+   * `to` first, and matched only against assistantPhone.
+   *
+   * Each salon has its own Twilio number, so the number dialled says which
+   * salon this is and nothing else has to be guessed at. forwardedFrom is
+   * tried afterwards, for a salon that forwards an old number instead — but
+   * only afterwards, because a forwarded number is the salon's own line, and
+   * one salon's old number can be another's `phone`. Reading that first meant
+   * a forward could name the wrong salon.
+   */
+  const attempts = [
+    { label: "to", number: to, fields: ["assistantPhone"] },
+    { label: "forwardedFrom", number: forwardedFrom, fields: ["assistantPhone", "phone", "secondaryPhone"] },
+  ] as const;
+
+  for (const { label, number, fields } of attempts) {
     if (!number) continue;
     const digits = tail(number);
     if (digits.length < 6) continue;
 
     const matches = await prisma.organization.findMany({
       where: {
-        OR: [
-          { assistantPhone: { endsWith: digits } },
-          { phone: { endsWith: digits } },
-          { secondaryPhone: { endsWith: digits } },
-        ],
+        OR: fields.map((field) => ({ [field]: { endsWith: digits } })),
       },
       select: {
         id: true,

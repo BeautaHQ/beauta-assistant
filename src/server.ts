@@ -70,7 +70,17 @@ export const buildServer = () => {
 
   app.get(
     "/health",
-    { schema: { tags: ["Service"], summary: "Liveness", operationId: "health" } },
+    {
+      schema: { tags: ["Service"], summary: "Liveness", operationId: "health" },
+      /*
+       * Silent on purpose. The load balancer polls this every few seconds, so
+       * two lines per check drown everything worth reading — and a call that
+       * went wrong is found by reading back, not by scrolling past health
+       * checks. A failing task stops answering, which the balancer notices
+       * without needing it written down here.
+       */
+      logLevel: "silent",
+    },
     async () => ({ ok: true }),
   );
 

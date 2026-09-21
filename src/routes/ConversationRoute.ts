@@ -88,6 +88,7 @@ export const conversationRouter = (app: FastifyInstance) => {
           ),
         }),
         response: {
+          404: Type.Object({ success: Type.Boolean(), message: Type.String() }),
           200: Type.Object({
             conversationId: Type.String(),
             greeting: Type.String(),
@@ -119,6 +120,22 @@ export const conversationRouter = (app: FastifyInstance) => {
             request.body?.to ?? null,
             request.body?.forwardedFrom ?? null,
           );
+
+      /*
+       * No salon, no conversation.
+       *
+       * Without one there is no price list, no diary and nothing to answer
+       * with — and the record of the call has nowhere to hang, which surfaced
+       * as a foreign key violation rather than as the plain refusal it should
+       * be. /incoming turns such calls away too, so the two agree.
+       */
+      if (!salon.found) {
+        return reply.status(404).send({
+          success: false,
+          message:
+            "No salon matches that number. Set the salon's assistantPhone, or pass an organizationId that exists.",
+        });
+      }
 
       const conversationId = `cnv_${randomUUID()}`;
       const session = newSession(conversationId, from, salon, channel);
