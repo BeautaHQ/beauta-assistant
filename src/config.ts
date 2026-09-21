@@ -72,20 +72,13 @@ export const DEFAULT_ORGANIZATION_ID = Number(process.env.ORGANIZATION_ID) || 0;
 export const DEFAULT_TIMEZONE = process.env.TIMEZONE ?? "Australia/Sydney";
 
 /**
- * Whether to expose the conversation API at /conversations.
- *
- * The same endpoints serve two things: the chat widget on the booking site, and
- * driving a call from a text box while developing. Off unless asked for,
- * because a booking made through them is a real booking in a real diary.
- */
-export const ENABLE_CHAT_API =
-  process.env.ENABLE_CHAT_API === "true" || process.env.ENABLE_SIMULATOR === "true";
-
-/**
  * Sites allowed to call the conversation API from a browser, comma separated.
  *
  * The booking site runs on its own origin, so without this the widget's
- * requests never leave the browser. Empty allows none.
+ * requests never leave the browser. Empty allows none, which is the whole of
+ * the browser-side control: there is no separate on/off switch, because a
+ * switch that has to be remembered is one that gets forgotten, and the chat
+ * widget is a shipped feature rather than a thing to opt into.
  */
 export const CHAT_ORIGINS = (process.env.CHAT_ORIGINS ?? "")
   .split(",")

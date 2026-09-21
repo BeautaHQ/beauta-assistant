@@ -11,8 +11,8 @@ generator client {
 datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
-  // Deliberately points nowhere. See scripts/sync-schema.mjs.
-  directUrl = env("BEAUTA_VOICE_MUST_NOT_MIGRATE")
+  // Points nowhere on purpose. See above.
+  directUrl = "postgresql://blocked:blocked@127.0.0.1:1/blocked"
 }
 
 enum RecurringType {

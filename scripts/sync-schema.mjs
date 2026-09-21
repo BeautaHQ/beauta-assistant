@@ -28,13 +28,13 @@ copyFileSync(source, target);
  * Migration is disabled here, not merely discouraged.
  *
  * Prisma Migrate and Introspection connect through `directUrl` when one is
- * set, while Prisma Client keeps using `url`. So directUrl points at an
+ * set, while Prisma Client keeps using `url`. So directUrl is pinned to an
  * address with nothing behind it: `prisma migrate` and `prisma db push` fail
  * on connection, while queries at runtime never touch it.
  *
- * It has to be a real-looking URL rather than an undefined variable, because
- * an unset one fails schema validation and takes `prisma generate` down with
- * it — which the build needs.
+ * Written literally rather than through an env var, so there is nothing to
+ * carry in .env, in the Dockerfile or in a secret — and nothing to forget,
+ * which would take `prisma generate` down with it.
  *
  * beauta-api owns this schema. A migration run from here would change a
  * database this service does not own, from a file that is only a copy.
@@ -44,8 +44,8 @@ const blocked = readFileSync(target, "utf8").replace(
   `datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
-  // Deliberately points nowhere. See scripts/sync-schema.mjs.
-  directUrl = env("BEAUTA_VOICE_MUST_NOT_MIGRATE")
+  // Points nowhere on purpose. See above.
+  directUrl = "postgresql://blocked:blocked@127.0.0.1:1/blocked"
 }`,
 );
 

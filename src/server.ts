@@ -7,7 +7,6 @@ import Fastify from "fastify";
 
 import {
   CHAT_ORIGINS,
-  ENABLE_CHAT_API,
   OPENAI_API_KEY,
   PORT,
   PUBLIC_URL,
@@ -79,15 +78,9 @@ export const buildServer = () => {
     conversationRelayRouter(instance);
   });
 
-  /*
-   * Registered only when asked for. These drive the same receptionist a caller
-   * reaches, so they book into a real diary.
-   */
-  if (ENABLE_CHAT_API) {
-    app.register(async (instance) => conversationRouter(instance), {
-      prefix: "/api/v1/conversations",
-    });
-  }
+  app.register(async (instance) => conversationRouter(instance), {
+    prefix: "/api/v1/conversations",
+  });
 
   return app;
 };
@@ -118,7 +111,7 @@ if (require.main === module) {
     .listen({ port: PORT, host: "0.0.0.0" })
     .then(() =>
       app.log.info(
-        { event: "voice_started", port: PORT, PUBLIC_URL, chatApi: ENABLE_CHAT_API },
+        { event: "voice_started", port: PORT, PUBLIC_URL },
         `Swagger on ${PUBLIC_URL || `http://localhost:${PORT}`}/api-docs`,
       ),
     )
