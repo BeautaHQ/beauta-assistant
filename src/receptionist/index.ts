@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 
-import { mergeBooking, type BookingState } from "../call/booking";
+import { mergeBooking, missingFields, type BookingState } from "../call/booking";
 import { OPENAI_API_KEY, OPENAI_MODEL } from "../config";
 import { StreamingStringField } from "./jsonStream";
 import type { CallSession } from "../call/session";
@@ -171,11 +171,23 @@ export const streamReply = async (
 
         /*
          * The right to book is earned on the turn the booking is read out, and
-         * only the model knows whether it actually read it. So the turn it
+         * only the model knows whether it actually read it — so the turn it
          * labels REVIEW is what grants it, and the tools check for it before
          * anything reaches the diary.
+         *
+         * But only when there is a whole booking to read. A REVIEW declared
+         * while the phone number was still missing granted the right early,
+         * and the next message — the caller supplying that number — was taken
+         * for their yes and booked on the spot. Nothing outstanding but the
+         * yes, or it does not count.
          */
-        if (intent === "REVIEW") session.reviewed = true;
+        const outstanding = missingFields(session.booking);
+        if (
+          intent === "REVIEW" &&
+          outstanding.every((gap) => gap === "confirmation")
+        ) {
+          session.reviewed = true;
+        }
         /*
          * Whether the turn talked about a day whose times it never looked up.
          *
