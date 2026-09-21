@@ -2,7 +2,7 @@ name: Deploy PROD to ECS
 
 on:
   push:
-    branches: ["main"]
+    branches: ["master"]
 
 permissions:
   id-token: write
