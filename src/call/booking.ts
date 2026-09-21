@@ -112,6 +112,3 @@ export const missingFields = (booking: BookingState): string[] => {
   if (!booking.confirmed) gaps.push("confirmation");
   return gaps;
 };
-
-const shown = (value: string | number | null) =>
-  value === null || value === "" ? "not yet" : String(value);

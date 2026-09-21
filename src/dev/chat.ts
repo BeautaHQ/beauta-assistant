@@ -7,11 +7,11 @@
  * back, how long it took, and which tools it reached for — which is the part a
  * real call hides.
  */
-import { closeCall, openCall } from "../callLog";
-import { getCatalogue } from "../catalogue";
+import { closeCall, openCall } from "../call/callLog";
+import { getCatalogue } from "../salon/catalogue";
 import { streamReply, type Turn } from "../receptionist";
-import { salonForCall } from "../salon";
-import { newSession, record } from "../session";
+import { salonForCall } from "../salon/lookup";
+import { newSession, record } from "../call/session";
 
 /*
  * VOICE_FAKE_FULL=2026-09-22,2026-09-23 makes those dates come back with no

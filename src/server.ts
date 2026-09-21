@@ -1,8 +1,11 @@
 import formbody from "@fastify/formbody";
+import swagger from "@fastify/swagger";
+import swaggerUI from "@fastify/swagger-ui";
 import websocket from "@fastify/websocket";
 import Fastify from "fastify";
 
 import {
+  ENABLE_SIMULATOR,
   OPENAI_API_KEY,
   PORT,
   PUBLIC_URL,
@@ -11,6 +14,7 @@ import {
 } from "./config";
 import { incomingCallRouter } from "./routes/IncomingCallRoute";
 import { conversationRelayRouter } from "./routes/ConversationRelayRoute";
+import { simulatorRouter } from "./routes/SimulatorRoute";
 
 /**
  * Beauta's phone line.
@@ -37,12 +41,43 @@ export const buildServer = () => {
   app.register(formbody);
   app.register(websocket);
 
-  app.get("/health", async () => ({ ok: true }));
+  app.register(swagger, {
+    openapi: {
+      info: {
+        title: "Beauta Voice",
+        version: "1.0.0",
+        description:
+          "The salon's phone line. Twilio drives /incoming and /stream; neither is callable by hand, so the interesting endpoints here are the simulator's, which hold the same conversation over HTTP.",
+      },
+    },
+  });
+
+  app.register(swaggerUI, {
+    routePrefix: "/api-docs",
+    uiConfig: { docExpansion: "list", deepLinking: false },
+  });
+
+  app.get(
+    "/health",
+    { schema: { tags: ["Service"], summary: "Liveness", operationId: "health" } },
+    async () => ({ ok: true }),
+  );
 
   app.register(async (instance) => {
     incomingCallRouter(instance);
     conversationRelayRouter(instance);
   });
+
+  /*
+   * Registered only when asked for. It drives the same receptionist as a real
+   * call, so it books into a real diary — which is exactly what makes it worth
+   * having, and exactly why it must not be reachable beside a live salon.
+   */
+  if (ENABLE_SIMULATOR) {
+    app.register(async (instance) => simulatorRouter(instance), {
+      prefix: "/simulator",
+    });
+  }
 
   return app;
 };
@@ -71,7 +106,12 @@ if (require.main === module) {
   const app = buildServer();
   app
     .listen({ port: PORT, host: "0.0.0.0" })
-    .then(() => app.log.info({ event: "voice_started", port: PORT, PUBLIC_URL }))
+    .then(() =>
+      app.log.info(
+        { event: "voice_started", port: PORT, PUBLIC_URL, simulator: ENABLE_SIMULATOR },
+        `Swagger on ${PUBLIC_URL || `http://localhost:${PORT}`}/api-docs`,
+      ),
+    )
     .catch((error) => {
       app.log.error(error);
       process.exit(1);

@@ -1,8 +1,8 @@
 /** `npx tsx src/dev/tool.ts check_availability '{"serviceId":5,"date":"2026-09-22"}'` */
-import { getCatalogue } from "../catalogue";
-import { salonForCall } from "../salon";
-import { newSession } from "../session";
-import { runTool } from "../tools";
+import { getCatalogue } from "../salon/catalogue";
+import { salonForCall } from "../salon/lookup";
+import { newSession } from "../call/session";
+import { runTool } from "../receptionist/tools";
 
 const [name, args] = process.argv.slice(2);
 

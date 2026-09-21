@@ -1,4 +1,4 @@
-import { BEAUTA_API_URL } from "./config";
+import { BEAUTA_API_URL } from "../config";
 
 /**
  * The salon's real data, over the same public endpoints the booking website
@@ -84,6 +84,34 @@ const localDateTime = (value: string) => value.replace("T", " ").slice(0, 16);
 /** The salon goes in the path, so it has no business in the body as well. */
 const rest = <T extends { organizationId: number }>({ organizationId, ...body }: T) =>
   body;
+
+/**
+ * Is this one slot still free, right now?
+ *
+ * The same check the booking site runs on its confirm page. The day's times
+ * were read when the caller asked about that day, and a phone call can sit on
+ * one question for minutes — long enough for the website to take the slot. Ask
+ * again at the last moment, so a caller who has just said yes is told the truth
+ * rather than an error about the diary being unreachable.
+ */
+export const isSlotFree = (params: {
+  organizationId: number;
+  serviceId: number;
+  date: string;
+  time: string;
+  addonIds?: number[];
+}) =>
+  call<{ isAvailable: boolean }>(`/api/v1/availability/check`, {
+    method: "POST",
+    body: JSON.stringify({
+      serviceId: params.serviceId,
+      addonIds: params.addonIds ?? [],
+      date: params.date,
+      time: params.time,
+      organizationId: params.organizationId,
+      quantity: 1,
+    }),
+  });
 
 export const createBooking = (input: {
   organizationId: number;

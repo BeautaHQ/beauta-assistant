@@ -70,3 +70,12 @@ export const DEFAULT_ORGANIZATION_ID = Number(process.env.ORGANIZATION_ID) || 0;
  * column — slots and "tomorrow" only mean anything in the salon's own day.
  */
 export const DEFAULT_TIMEZONE = process.env.TIMEZONE ?? "Australia/Sydney";
+
+/**
+ * Whether to expose the text simulator at /simulator, and Swagger with it.
+ *
+ * Off unless asked for. It is not a mock: a booking made through it is a real
+ * booking in a real diary, and the salon's customer gets the real confirmation
+ * email. Fine against a dev database, never in front of a live one.
+ */
+export const ENABLE_SIMULATOR = process.env.ENABLE_SIMULATOR === "true";

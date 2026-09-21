@@ -30,6 +30,65 @@ the Twilio number's "A call comes in" webhook at `POST <PUBLIC_URL>/incoming`.
 requests. Never set that in a deployed environment — `/incoming` is a public
 URL, and without the check anyone can drive this service.
 
+## Layout
+
+    src/
+      server.ts            wiring: formbody, websocket, routes, /health
+      config.ts            every setting, read once at boot
+      routes/              the two ways in
+        IncomingCallRoute      POST /incoming — Twilio asks what to do
+        ConversationRelayRoute WS /stream — the conversation itself
+      receptionist/        the AI
+        index.ts               the turn: stream, run tools, stream again
+        prompt.ts              every word the model is told
+        tools.ts               what it can do, and what it is not allowed to
+        jsonStream.ts          lifts `say` out of the JSON as it arrives
+      call/                one phone call
+        session.ts             what this call knows about itself
+        booking.ts             the booking being filled in, and what is missing
+        callLog.ts             the row the salon reads afterwards
+      salon/               whose phone was rung
+        lookup.ts              dialled number -> organization
+        catalogue.ts           the price list, cached per salon
+        clock.ts               today and tomorrow in the salon's timezone
+        slots.ts               free times, cut down to the ones worth saying
+      clients/             things outside this process
+        beautaApi.ts           bookings, availability, the catalogue
+        prisma.ts              beauta-api's database, read here, one table written
+      auth/                Twilio request signatures
+      utils/               TwiML
+      dev/                 scripts for driving it without a phone
+
+The split that matters is `receptionist/` against `call/`. The receptionist is
+the part that can be wrong — it is a model, and it drifts. `call/` is the part
+that cannot: the state it is held to, and the rules the tools enforce before
+anything reaches a real diary.
+
+`prompt.ts` is deliberately apart from both. Kept inside the state it put prose
+into a module whose job was to hold facts; kept inside the streaming loop the
+wording of a question sat in the middle of chunk handling.
+
+## Driving it without a phone
+
+A call is text in and text out, so a phone is not needed to exercise one.
+
+    npx tsx src/dev/chat.ts "Hi, can I book a gel removal" "Tomorrow afternoon"
+
+Each argument is one thing the caller says. It prints the reply, the time to
+first token, and the final booking state, and writes a real `voice_call` row.
+
+    VOICE_DEBUG=1   show every tool call and what it returned
+    VOICE_TO=+6442101554   pretend that number was the one dialled
+
+    npx tsx src/dev/tool.ts check_availability '{"serviceId":5,"date":"2026-09-22"}'
+    npx tsx src/dev/model.ts gpt-4o        does this account have that model
+
+## The database
+
+`beauta-api` owns the schema and every migration. `prisma/schema.prisma` here
+is a copy — refresh it with `npm run prisma:sync` after beauta-api migrates.
+This service reads the salon's details and writes `voice_call`, nothing else.
+
 ## What happens on a call
 
     POST /incoming                     Twilio asks what to do
@@ -53,10 +112,11 @@ the conversation and any calls into beauta-api carry over unchanged.
 ## Where it is up to
 
 Working: the webhook, signature verification, and a receptionist that holds a
-conversation, streams its answers, and stops when the caller cuts in.
+conversation, streams its answers, and stops when the caller cuts in. It knows
+the price list, reads the diary, offers real times, books, and puts a caller on
+the waitlist when a day is gone. Every call is written to `voice_call` with its
+transcript.
 
-Not yet: it cannot see the diary. It takes booking details, reads them back and
-says the salon will confirm. Next is reading availability from beauta-api, then
-booking through it — writes go through `createBooking` rather than the
-database, so a phone booking gets the same conflict checks and confirmation
-emails as any other.
+Not yet: extras are never offered, and there is no way to cancel or move a
+booking over the phone. One number, one salon, until `to`/`forwardedFrom` is
+mapped for more than one.

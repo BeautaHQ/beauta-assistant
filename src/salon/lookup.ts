@@ -1,5 +1,5 @@
-import { prisma } from "./client";
-import { DEFAULT_ORGANIZATION_ID, DEFAULT_TIMEZONE } from "./config";
+import { prisma } from "../clients/prisma";
+import { DEFAULT_ORGANIZATION_ID, DEFAULT_TIMEZONE } from "../config";
 
 /** The salon this call belongs to, worked out once when the call connects. */
 export interface Salon {

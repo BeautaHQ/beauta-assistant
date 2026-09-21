@@ -5,18 +5,22 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p .",
+    "build": "npm run clean && tsc -p .",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit -p .",
     "prisma:sync": "node scripts/sync-schema.mjs && prisma generate",
-    "prisma:generate": "prisma generate"
+    "prisma:generate": "prisma generate",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
     "@fastify/formbody": "^9.0.0",
+    "@fastify/swagger": "^9.6.1",
+    "@fastify/swagger-ui": "^5.2.3",
     "@fastify/websocket": "^11.0.2",
     "@prisma/client": "^6.19.3",
+    "@sinclair/typebox": "^0.34.41",
     "fastify": "^5.12.1",
     "openai": "^6.14.0",
     "twilio": "^5.3.5"

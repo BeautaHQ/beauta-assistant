@@ -1,9 +1,14 @@
 import type OpenAI from "openai";
 
-import { checkAvailability, createBooking, joinWaitlist } from "./beautaApi";
-import { mergeBooking, missingFields } from "./booking";
-import { offerable } from "./slots";
-import type { CallSession } from "./session";
+import {
+  checkAvailability,
+  createBooking,
+  isSlotFree,
+  joinWaitlist,
+} from "../clients/beautaApi";
+import { mergeBooking, missingFields } from "../call/booking";
+import { offerable } from "../salon/slots";
+import type { CallSession } from "../call/session";
 
 /**
  * What the receptionist can actually do, as opposed to talk about.
@@ -108,6 +113,7 @@ export const runTool = async (
   session: CallSession,
 ): Promise<string> => {
   const answer = await dispatch(name, args, session);
+  session.toolsThisTurn.push({ name, args, result: answer });
   if (process.env.VOICE_DEBUG) {
     console.error(`  -> ${name}(${JSON.stringify(args)})`);
     console.error(`     ${answer.slice(0, 300)}`);
@@ -204,6 +210,13 @@ const dispatch = async (
           );
         }
 
+        if (!session.reviewed) {
+          return refuse(
+            "not_reviewed",
+            "Nothing has been read back yet. Take one REVIEW turn first — the service, any extras, the day, the time, their first and last name — and wait for them to say yes. Their name alone is not a yes.",
+          );
+        }
+
         /*
          * The check worth the most: the time has to be one the diary gave us,
          * for the service we asked the diary about. It is what stops a
@@ -228,6 +241,30 @@ const dispatch = async (
             "time_not_free",
             `${wanted.time} is not free. Offer one of the times that are, or the waitlist.`,
             { available: offered.slots },
+          );
+        }
+
+        /*
+         * One last look before committing. The list this was checked against
+         * may be minutes old by now, and beauta-api would reject the booking
+         * anyway — but as an error, which the receptionist can only relay as
+         * not being able to reach the diary. Asking first turns that into a
+         * sentence the caller can act on.
+         */
+        const stillFree = await isSlotFree({
+          organizationId: session.salon.organizationId,
+          serviceId: wanted.serviceId!,
+          date: wanted.date!,
+          time: wanted.time!,
+          addonIds: wanted.addonIds,
+        });
+
+        if (!stillFree?.isAvailable) {
+          // The day has moved on, so throw away what we thought we knew.
+          session.offered = null;
+          return refuse(
+            "just_taken",
+            `${wanted.time} has gone since you offered it. Say so, check ${wanted.date} again, and offer what is left.`,
           );
         }
 
@@ -286,38 +323,4 @@ const dispatch = async (
   } catch (error) {
     return refuse("call_failed", (error as Error).message);
   }
-};
-
-/**
- * Today and tomorrow, in the salon's own clock.
- *
- * Both are handed over rather than only today. Asked to work "tomorrow" out for
- * itself the model took it as the day after whatever date was last mentioned,
- * so a caller who said "put me on the waitlist for tomorrow" during a
- * conversation about Wednesday was waitlisted for Thursday. Tomorrow is
- * tomorrow, counted from today, and now it never has to do the sum.
- */
-export const salonDates = (timezone: string) => {
-  const format = (date: Date) =>
-    new Intl.DateTimeFormat("en-CA", {
-      timeZone: timezone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(date);
-
-  const weekday = (date: Date) =>
-    new Intl.DateTimeFormat("en-AU", { timeZone: timezone, weekday: "long" }).format(
-      date,
-    );
-
-  const now = new Date();
-  const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-
-  return {
-    today: format(now),
-    todayName: weekday(now),
-    tomorrow: format(tomorrow),
-    tomorrowName: weekday(tomorrow),
-  };
 };

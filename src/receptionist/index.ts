@@ -1,10 +1,11 @@
 import OpenAI from "openai";
 
-import { BOOKING_SCHEMA, mergeBooking, type BookingState } from "./booking";
-import { OPENAI_API_KEY, OPENAI_MODEL } from "./config";
+import { mergeBooking, type BookingState } from "../call/booking";
+import { OPENAI_API_KEY, OPENAI_MODEL } from "../config";
 import { StreamingStringField } from "./jsonStream";
-import { briefing, type CallSession } from "./session";
-import { runTool, salonDates, TOOLS } from "./tools";
+import type { CallSession } from "../call/session";
+import { briefing, REPLY_FORMAT, systemPrompt } from "./prompt";
+import { runTool, TOOLS } from "./tools";
 
 const client = new OpenAI({ apiKey: OPENAI_API_KEY });
 
@@ -16,96 +17,35 @@ const client = new OpenAI({ apiKey: OPENAI_API_KEY });
  */
 const REASONING_MODEL = /^(o\d|gpt-[5-9])/.test(OPENAI_MODEL);
 
-/**
- * Short on purpose. A phone caller cannot skim, so anything said has to be
- * short enough to hold in the ear — paragraphs that read fine on screen are
- * unbearable read aloud.
- *
- * The price list is pasted in whole rather than looked up. It costs about a
- * thousand tokens on a prompt that caches, and it buys back a tool round of
- * silence at the start of every call plus the ids the model used to guess at.
- */
-const systemPrompt = (session: CallSession) => {
-  const { today, todayName, tomorrow, tomorrowName } = salonDates(session.salon.timezone);
-  const catalogue = session.catalogue?.text ?? "";
-
-  return `You are the receptionist for ${session.salon.name}, a nail and beauty salon, answering the phone.
-
-THE DATE
-Today is ${todayName} ${today}. Tomorrow is ${tomorrowName} ${tomorrow}. The salon runs on ${session.salon.timezone}.
-Every relative day is counted from today, never from a date mentioned earlier in the call. If the caller says "tomorrow" while you are discussing Wednesday, they mean ${tomorrow}, not the day after Wednesday. When it is not obvious, say the date back to them.
-
-HOW TO SPEAK
-One or two short sentences, then stop and let them reply. Never read a list aloud: offer at most two or three options and let them pick. Say times the way people say them — "two o'clock", "quarter past three" — not "14:00".
-
-THE PRICE LIST
-Every service, with its id, price and duration. Extras that can be added to a service are listed under it as id:name price. These ids are the only real ones — never use any other, and never quote a price or duration that is not here.
-
-${catalogue}
-
-BOOKING, IN ORDER
-1. Match what they want to a service above. If they are vague ("my nails done"), ask one question to narrow it.
-2. Ask which day.
-3. Call check_availability for that day. Never guess or invent a time.
-4. Offer two or three of the times it returns, near what they asked for. If they wanted the afternoon, offer afternoon ones.
-5. If it comes back full, say so and offer two things: the waitlist, or another day. Never pretend a time exists.
-6. Get their first and last name.
-7. Read the whole thing back — service, day, time — and wait for them to say yes before calling create_booking.
-
-Take one step per turn. The caller has not answered the question you are about to skip.
-
-RULES
-Everything you state comes from the price list or a tool. Never invent prices, times or staff names.
-If a tool fails, say you cannot reach the diary right now and offer to take a message.
-Their phone number is already known — never ask for it.
-Extras are worth offering once the service is settled, not before.
-Never read a booking reference out. It is a string of random characters; nobody can take it down over the phone, and the salon has their number.
-Never set endCall in the same breath as a question. Ask, hear the answer, then say goodbye.
-
-ANSWER SHAPE
-"say" is the words to speak aloud, nothing else — no labels, no markdown, no stage directions.
-"booking" is what you have pinned down so far. Carry forward everything already known and add what this turn established; leave a field null only while it is genuinely unknown.
-"endCall" is true only once the call is finished and you have said goodbye.`;
-};
-
-/**
- * The model answers in this shape rather than free text, so the reply is
- * already structured when it arrives instead of being guessed at afterwards.
- * `strict` makes the schema a guarantee, not a request.
- */
-const REPLY_FORMAT = {
-  type: "json_schema",
-  json_schema: {
-    name: "receptionist_reply",
-    strict: true,
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["say", "booking", "endCall"],
-      properties: {
-        say: {
-          type: "string",
-          description: "Exactly what to speak aloud to the caller.",
-        },
-        booking: BOOKING_SCHEMA,
-        endCall: {
-          type: "boolean",
-          description: "True only after saying goodbye on a finished call.",
-        },
-      },
-    },
-  },
-} as const;
-
 export type Turn =
   | { role: "user" | "assistant"; content: string }
   | OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
+export type Intent =
+  | "FAQ"
+  | "CHECK_AVAILABILITY"
+  | "ASK_SLOT"
+  | "ASK_INFO"
+  | "REVIEW"
+  | "CONFIRM"
+  | "OTHER";
+
 export interface Reply {
   /** What to speak. Already streamed out token by token by the time this returns. */
   say: string;
+  /** What the model decided this turn was for, before it wrote a word. */
+  intent: Intent;
   /** Whether to hang up once it has been spoken. */
   endCall: boolean;
+  /**
+   * Set when the turn claimed to be reading the diary but never did.
+   *
+   * Not corrected here: by the time we know, the words have already been
+   * streamed and the caller has heard them. Retrying would have them hear the
+   * stall and then the correction. So it is reported instead — a stall that
+   * used to be invisible is now a flag on the turn.
+   */
+  brokePromise: boolean;
 }
 
 /**
@@ -132,6 +72,7 @@ export const streamReply = async (
   signal: AbortSignal,
 ): Promise<Reply> => {
   session.checksThisTurn = 0;
+  session.toolsThisTurn = [];
 
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "system", content: systemPrompt(session) },
@@ -182,15 +123,40 @@ export const streamReply = async (
       try {
         const parsed = JSON.parse(raw) as {
           say?: string;
+          intent?: Intent;
           booking?: Partial<BookingState>;
           endCall?: boolean;
         };
         session.booking = mergeBooking(session.booking, parsed.booking);
-        return { say: parsed.say ?? spoken.value, endCall: parsed.endCall === true };
+
+        const intent = parsed.intent ?? "OTHER";
+
+        /*
+         * The right to book is earned on the turn the booking is read out, and
+         * only the model knows whether it actually read it. So the turn it
+         * labels REVIEW is what grants it, and the tools check for it before
+         * anything reaches the diary.
+         */
+        if (intent === "REVIEW") session.reviewed = true;
+        const readTheDiary = session.toolsThisTurn.some(
+          (used) => used.name === "check_availability",
+        );
+
+        return {
+          say: parsed.say ?? spoken.value,
+          intent,
+          endCall: parsed.endCall === true,
+          brokePromise: intent === "CHECK_AVAILABILITY" && !readTheDiary,
+        };
       } catch {
         // Cut short by max_tokens: what was streamed is what the caller heard,
         // so keep it rather than throwing away a half-spoken sentence.
-        return { say: spoken.value, endCall: false };
+        return {
+          say: spoken.value,
+          intent: "OTHER",
+          endCall: false,
+          brokePromise: false,
+        };
       }
     }
 
@@ -222,6 +188,8 @@ export const streamReply = async (
 
   return {
     say: "Sorry, I'm having trouble with that. Can I take a message for the salon?",
+    intent: "OTHER",
     endCall: false,
+    brokePromise: false,
   };
 };

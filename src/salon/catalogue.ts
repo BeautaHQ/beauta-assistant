@@ -1,4 +1,4 @@
-import { listAddons, listServices } from "./beautaApi";
+import { listAddons, listServices } from "../clients/beautaApi";
 
 /**
  * The salon's price list, written out for the model.

@@ -20,43 +20,64 @@ interface IncomingCallBody {
  * talk to them".
  */
 export const incomingCallRouter = (app: FastifyInstance) => {
-  app.post<{ Body: IncomingCallBody }>("/incoming", async (request, reply) => {
-    if (!isValidTwilioSignature(request, "/incoming")) {
-      request.log.warn({ event: "twilio_signature_rejected" }, "Rejected webhook");
-      return reply.status(403).send("Forbidden");
-    }
-
-    const body = request.body ?? {};
-    request.log.info(
-      {
-        event: "incoming_call",
-        callSid: body.CallSid,
-        from: body.From,
-        to: body.To,
-        forwardedFrom: body.ForwardedFrom,
+  app.post<{ Body: IncomingCallBody }>(
+    "/incoming",
+    {
+      schema: {
+        tags: ["Twilio"],
+        summary: "A call has arrived",
+        description:
+          "Twilio's webhook. Posted as form-urlencoded and signed, so it is not callable from this page — it is documented so the shape Twilio sends is written down somewhere. The reply is TwiML handing the call to the /stream socket.",
+        operationId: "incomingCall",
+        // No body schema on purpose: Twilio decides what it sends, and a
+        // stricter contract here would reject a call rather than answer it.
+        response: { 200: { type: "string" }, 403: { type: "string" } },
       },
-      "Call received",
-    );
+    },
+    async (request, reply) => {
+      if (!isValidTwilioSignature(request, "/incoming")) {
+        request.log.warn(
+          { event: "twilio_signature_rejected" },
+          "Rejected webhook",
+        );
+        return reply.status(403).send("Forbidden");
+      }
 
-    reply.header("Content-Type", "text/xml");
-
-    /*
-     * A call with nowhere to stream is worse than a busy signal — the caller
-     * would sit on silence — so say something and hang up cleanly instead.
-     */
-    if (!relayUrl().startsWith("ws")) {
-      request.log.error({ event: "public_url_missing" }, "PUBLIC_URL not set");
-      return reply.send(
-        sayAndHangUpTwiml("Sorry, we cannot take your call right now."),
+      const body = request.body ?? {};
+      request.log.info(
+        {
+          event: "incoming_call",
+          callSid: body.CallSid,
+          from: body.From,
+          to: body.To,
+          forwardedFrom: body.ForwardedFrom,
+        },
+        "Call received",
       );
-    }
 
-    return reply.send(
-      conversationRelayTwiml({
-        url: relayUrl(),
-        welcomeGreeting: GREETING,
-        language: LANGUAGE,
-      }),
-    );
-  });
+      reply.header("Content-Type", "text/xml");
+
+      /*
+       * A call with nowhere to stream is worse than a busy signal — the caller
+       * would sit on silence — so say something and hang up cleanly instead.
+       */
+      if (!relayUrl().startsWith("ws")) {
+        request.log.error(
+          { event: "public_url_missing" },
+          "PUBLIC_URL not set",
+        );
+        return reply.send(
+          sayAndHangUpTwiml("Sorry, we cannot take your call right now."),
+        );
+      }
+
+      return reply.send(
+        conversationRelayTwiml({
+          url: relayUrl(),
+          welcomeGreeting: GREETING,
+          language: LANGUAGE,
+        }),
+      );
+    },
+  );
 };

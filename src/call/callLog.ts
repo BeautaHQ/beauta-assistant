@@ -1,6 +1,6 @@
 import type { Prisma } from "@prisma/client";
 
-import { prisma } from "./client";
+import { prisma } from "../clients/prisma";
 import type { CallSession } from "./session";
 
 /**

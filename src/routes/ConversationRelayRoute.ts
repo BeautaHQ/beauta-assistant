@@ -1,11 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 
-import { closeCall, openCall } from "../callLog";
-import { getCatalogue } from "../catalogue";
-import { salonForCall } from "../salon";
+import { closeCall, openCall } from "../call/callLog";
+import { getCatalogue } from "../salon/catalogue";
+import { salonForCall } from "../salon/lookup";
 import { streamReply, type Turn } from "../receptionist";
-import { newSession, record, type CallSession } from "../session";
+import { newSession, record, type CallSession } from "../call/session";
 
 /** What ConversationRelay sends us. Only the fields we act on are typed. */
 type RelayIn =
@@ -23,7 +23,9 @@ type RelayIn =
  * holds a conversation, not an audio pipeline.
  */
 export const conversationRelayRouter = (app: FastifyInstance) => {
-  app.get("/stream", { websocket: true }, (socket: WebSocket, request) => {
+  // Hidden from Swagger: a WebSocket upgrade is not something the docs page can
+  // call, and listing it invites someone to try.
+  app.get("/stream", { websocket: true, schema: { hide: true } }, (socket: WebSocket, request) => {
     const history: Turn[] = [];
     let session: CallSession = newSession("unknown", "unknown", {
       organizationId: 0,
@@ -72,8 +74,20 @@ export const conversationRelayRouter = (app: FastifyInstance) => {
         );
         say("", true);
         history.push({ role: "assistant", content: reply.say });
-        record(session, "salon", reply.say);
-        request.log.info({ event: "replied", callSid, reply: reply.say }, "Answered");
+        record(session, "salon", reply.say, {
+          intent: reply.intent,
+          brokePromise: reply.brokePromise,
+        });
+        request.log.info(
+          {
+            event: "replied",
+            callSid,
+            intent: reply.intent,
+            brokePromise: reply.brokePromise,
+            reply: reply.say,
+          },
+          "Answered",
+        );
 
         // The model decides the call is over; Twilio speaks the goodbye first,
         // then hands back to TwiML, which ends it.
