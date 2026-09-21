@@ -1832,6 +1832,9 @@ enum ConversationOutcome {
   BOOKED
   WAITLISTED
   MESSAGE
+  /// Handed to a person at the salon. The rest of the call happened off this
+  /// system, so nothing after this point is recorded here.
+  TRANSFERRED
   NO_ACTION
 }
 
