@@ -53,6 +53,7 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           firstName: { type: "string" },
           lastName: { type: "string" },
           phone: { type: "string", description: "The number to ring them back on" },
+          email: { type: "string", description: "Optional. Omit unless they gave one." },
           addonIds: { type: "array", items: { type: "number" } },
           callerConfirmed: {
             type: "boolean",
@@ -277,6 +278,14 @@ const dispatch = async (
   try {
     switch (name) {
       case "check_availability": {
+        // An empty catalogue means the price list never loaded, not that the
+        // salon sells nothing — say which, so the reply is not a shrug.
+        if (session.catalogue && session.catalogue.serviceIds.size === 0) {
+          return refuse(
+            "price_list_unavailable",
+            "The price list did not load for this call, so nothing can be checked or booked. Apologise, and offer to take a message or put them through.",
+          );
+        }
         if (session.catalogue && !session.catalogue.serviceIds.has(args.serviceId)) {
           return refuse(
             "unknown_service",
@@ -357,6 +366,7 @@ const dispatch = async (
           firstName: args.firstName,
           lastName: args.lastName,
           phone: args.phone,
+          email: args.email,
           addonIds: args.addonIds ?? [],
           confirmed: args.callerConfirmed === true,
         });
@@ -444,6 +454,7 @@ const dispatch = async (
           firstName: wanted.firstName!,
           lastName: wanted.lastName!,
           phone: wanted.phone!,
+          email: wanted.email,
           serviceId: wanted.serviceId!,
           addonIds: wanted.addonIds,
           quantity: wanted.quantity ?? 1,

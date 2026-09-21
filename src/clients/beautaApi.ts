@@ -10,6 +10,16 @@ import { BEAUTA_API_URL } from "../config";
  * a web one, or the diary quietly goes wrong.
  */
 
+/** fetch, but a connection failure says which address it could not reach. */
+const fetchOrExplain = async (target: string, init: RequestInit) => {
+  try {
+    return await fetch(target, init);
+  } catch (error) {
+    const reason = (error as Error).message;
+    throw new Error(`${reason} (${new URL(target).origin})`);
+  }
+};
+
 const call = async <T>(
   path: string,
   init?: RequestInit & { timeoutMs?: number },
@@ -19,7 +29,17 @@ const call = async <T>(
    * receptionist can apologise rather than leave them on silence.
    */
   const timeout = AbortSignal.timeout(init?.timeoutMs ?? 8000);
-  const response = await fetch(`${BEAUTA_API_URL}${path}`, {
+  const target = `${BEAUTA_API_URL}${path}`;
+
+  /*
+   * A failed connection says only "fetch failed", which is Node's way of
+   * covering a refused port, a name that does not resolve and a broken TLS
+   * handshake all at once. On its own it left a deployed service with no way
+   * to tell an unset BEAUTA_API_URL — which quietly means localhost, inside a
+   * container where nothing is listening — from a host it genuinely could not
+   * reach. So the address it tried goes in the message.
+   */
+  const response = await fetchOrExplain(target, {
     ...init,
     signal: timeout,
     headers: {

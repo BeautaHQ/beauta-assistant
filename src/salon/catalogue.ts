@@ -84,7 +84,20 @@ const build = async (organizationId: number): Promise<Catalogue> => {
 export const getCatalogue = async (organizationId: number): Promise<Catalogue> => {
   const hit = cached.get(organizationId);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.value;
+
   const value = await build(organizationId);
+
+  /*
+   * An empty price list is never cached.
+   *
+   * A salon with no services is not a thing; an empty answer means beauta-api
+   * was unreachable or looking at the wrong database for that moment. Caching
+   * it turns a blink into five minutes of "that service is not on the price
+   * list" for every caller, and the receptionist cannot say anything useful
+   * because as far as it can tell the salon sells nothing.
+   */
+  if (value.serviceIds.size === 0) return value;
+
   cached.set(organizationId, { at: Date.now(), value });
   return value;
 };

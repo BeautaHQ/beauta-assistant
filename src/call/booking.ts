@@ -35,6 +35,14 @@ export interface BookingState {
    * A phone call happens to know it before a word is spoken; a chat has to ask.
    */
   phone: string | null;
+  /**
+   * Optional, and only ever asked for in chat.
+   *
+   * It buys them a confirmation they can keep, but it is not worth a turn on a
+   * phone call — spelling an address out loud is slow and goes wrong. Never in
+   * missingFields: a booking is complete without it.
+   */
+  email: string | null;
   /** The caller has heard the whole thing read back and said yes. */
   confirmed: boolean;
 }
@@ -50,6 +58,7 @@ export const emptyBooking = (): BookingState => ({
   firstName: null,
   lastName: null,
   phone: null,
+  email: null,
   confirmed: false,
 });
 
@@ -68,6 +77,7 @@ export const BOOKING_SCHEMA = {
     "firstName",
     "lastName",
     "phone",
+    "email",
     "confirmed",
   ],
   properties: {
@@ -96,6 +106,10 @@ export const BOOKING_SCHEMA = {
     phone: {
       type: ["string", "null"],
       description: "The number the salon would ring them on",
+    },
+    email: {
+      type: ["string", "null"],
+      description: "Optional, chat only. Null unless they gave one.",
     },
     confirmed: {
       type: "boolean",
@@ -144,6 +158,7 @@ export const mergeBooking = (
     firstName: real(update.firstName) ?? current.firstName,
     lastName: real(update.lastName) ?? current.lastName,
     phone: real(update.phone) ?? current.phone,
+    email: real(update.email) ?? current.email,
     confirmed: update.confirmed ?? current.confirmed,
   };
 };
