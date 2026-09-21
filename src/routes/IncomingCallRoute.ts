@@ -1,8 +1,14 @@
 import type { FastifyInstance } from "fastify";
 
 import { isValidTwilioSignature } from "../auth/twilioSignature";
-import { GREETING, LANGUAGE, relayUrl } from "../config";
-import { conversationRelayTwiml, sayAndHangUpTwiml } from "../utils/twiml";
+import { FORWARD_UNKNOWN_TO, LANGUAGE, handoffUrl, relayUrl } from "../config";
+import { openingLine } from "../salon/greeting";
+import { salonForCall } from "../salon/lookup";
+import {
+  conversationRelayTwiml,
+  sayAndDialTwiml,
+  sayAndHangUpTwiml,
+} from "../utils/twiml";
 
 /** What Twilio posts when a call arrives. Only the fields we read are listed. */
 interface IncomingCallBody {
@@ -71,11 +77,59 @@ export const incomingCallRouter = (app: FastifyInstance) => {
         );
       }
 
+      /*
+       * The salon is looked up here, before the call is even connected,
+       * because Twilio speaks this greeting itself from the TwiML — the
+       * socket does not exist yet, so nothing later can put the salon's name
+       * into the first thing the caller hears.
+       *
+       * A failure is not worth dropping a call over: the generic greeting
+       * still answers the phone.
+       */
+      const salon = await salonForCall(body.To ?? null, body.ForwardedFrom ?? null)
+        .then((result) => result.salon)
+        .catch((error: Error) => {
+          request.log.error(
+            { event: "salon_lookup_failed", errorMessage: error.message },
+            "Could not work out which salon was called",
+          );
+          return null;
+        });
+
+      /*
+       * A number belonging to no salon gets a person, or nothing.
+       *
+       * The receptionist would have no price list, no diary and no salon to
+       * speak for; letting it answer anyway means an assistant improvising
+       * about a business it knows nothing about, on a line somebody is paying
+       * for. Better to put the caller through, or tell them plainly.
+       */
+      if (!salon?.found) {
+        request.log.warn(
+          {
+            event: "unknown_salon",
+            to: body.To,
+            forwardedFrom: body.ForwardedFrom,
+            forwardingTo: FORWARD_UNKNOWN_TO || null,
+          },
+          "Call to a number that matches no salon",
+        );
+
+        return reply.send(
+          FORWARD_UNKNOWN_TO
+            ? sayAndDialTwiml("One moment, I'll put you through.", FORWARD_UNKNOWN_TO)
+            : sayAndHangUpTwiml(
+                "Sorry, this number is not connected to a salon. Please check the number and try again.",
+              ),
+        );
+      }
+
       return reply.send(
         conversationRelayTwiml({
           url: relayUrl(),
-          welcomeGreeting: GREETING,
+          welcomeGreeting: openingLine("PHONE", salon.name),
           language: LANGUAGE,
+          action: handoffUrl(),
         }),
       );
     },

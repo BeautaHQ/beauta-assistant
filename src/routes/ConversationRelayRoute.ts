@@ -33,6 +33,8 @@ export const conversationRelayRouter = (app: FastifyInstance) => {
       organizationId: 0,
       name: "the salon",
       timezone: "Australia/Sydney",
+      found: false,
+      staffPhone: null,
     });
     /*
      * Ours, minted the moment the socket opens. Twilio's call id arrives a beat
@@ -97,10 +99,23 @@ export const conversationRelayRouter = (app: FastifyInstance) => {
           "Answered",
         );
 
-        // The model decides the call is over; Twilio speaks the goodbye first,
-        // then hands back to TwiML, which ends it.
-        if (reply.endCall && socket.readyState === socket.OPEN) {
-          socket.send(JSON.stringify({ type: "end" }));
+        /*
+         * Letting go of the call, and saying why.
+         *
+         * Both endings close the socket the same way, so the reason travels
+         * with it: /handoff reads it and either puts the caller through to the
+         * salon or hangs up. Twilio speaks the sentence above first, so the
+         * caller hears "putting you through" before the line moves.
+         */
+        if ((reply.endCall || session.transferring) && socket.readyState === socket.OPEN) {
+          socket.send(
+            JSON.stringify({
+              type: "end",
+              handoffData: JSON.stringify({
+                reason: session.transferring ? "staff" : "done",
+              }),
+            }),
+          );
         }
       } catch (error) {
         if (controller.signal.aborted) return;

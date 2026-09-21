@@ -75,6 +75,15 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "transfer_to_staff",
+      description:
+        "Put the caller through to someone at the salon. Use when they ask for a person, or when something is beyond you — a complaint, a question about their bill, anything the price list and the diary cannot answer. Say you are putting them through before calling it. Phone calls only.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "find_booking",
       description:
         "Find the caller's existing booking so it can be moved or cancelled. Ask them to say their phone number and which day the appointment is on — not the exact time. Phone calls only.",
@@ -455,6 +464,25 @@ const dispatch = async (
         });
 
         return JSON.stringify({ ok: true, waitlisted: true });
+      }
+
+      case "transfer_to_staff": {
+        if (session.channel !== "PHONE") {
+          return refuse(
+            "chat_cannot_transfer",
+            "There is no call to put through in chat. Give them the salon's number, or offer to take a message.",
+          );
+        }
+        if (!session.salon.staffPhone) {
+          return refuse(
+            "no_staff_number",
+            "This salon has no second number to put callers through to. Say nobody is free to take the call and offer to take a message.",
+          );
+        }
+
+        // The socket does the handing over; this only says it should.
+        session.transferring = true;
+        return JSON.stringify({ ok: true, transferring: true });
       }
 
       case "find_booking": {

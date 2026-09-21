@@ -78,6 +78,7 @@ export type Intent =
   | "REVIEW"
   | "CONFIRM"
   | "MANAGE"
+  | "TRANSFER"
   | "OTHER";
 
 export interface Reply {
@@ -232,6 +233,20 @@ export const streamReply = async (
          * Safe to overwrite because nothing has been spoken yet: chat collects
          * the whole reply before showing it, and this never fires on a call.
          */
+        /*
+         * Saying "I'm putting you through" is the decision; the tool is only
+         * how it is carried out. The model announced the transfer and called
+         * nothing, so the socket closed with "done" and Twilio hung up on a
+         * caller who had just been told to hold. The intent is enough.
+         */
+        if (
+          session.channel === "PHONE" &&
+          intent === "TRANSFER" &&
+          session.salon.staffPhone
+        ) {
+          session.transferring = true;
+        }
+
         if (session.channel === "CHAT" && intent === "MANAGE") {
           return {
             say: CHAT_CANNOT_MANAGE,

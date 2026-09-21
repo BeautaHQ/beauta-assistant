@@ -9,6 +9,7 @@ import { newSession, record, type CallSession } from "../call/session";
 import { GREETING } from "../config";
 import { streamReply, type Turn } from "../receptionist";
 import { getCatalogue } from "../salon/catalogue";
+import { openingLine } from "../salon/greeting";
 import { salonById, salonForCall } from "../salon/lookup";
 
 /**
@@ -161,7 +162,7 @@ export const conversationRouter = (app: FastifyInstance) => {
             say: Type.String({ description: "What Twilio would speak aloud" }),
             intent: Type.String({
               description:
-                "What the turn was for: FAQ, CLARIFY, CHECK_AVAILABILITY, ASK_SLOT, ASK_INFO, REVIEW, CONFIRM, OTHER. Nothing books before REVIEW has happened.",
+                "What the turn was for: FAQ, CLARIFY, ADDONS, CHECK_AVAILABILITY, ASK_SLOT, ASK_INFO, REVIEW, CONFIRM, MANAGE, TRANSFER, OTHER. Nothing books before REVIEW has happened.",
             }),
             brokePromise: Type.Boolean({
               description:
@@ -352,19 +353,3 @@ const asObject = (value: string): Record<string, unknown> => {
     return { raw: value };
   }
 };
-
-/**
- * The first thing said, before anyone has typed anything.
- *
- * A phone call gets the configured GREETING, because Twilio speaks that one
- * aloud from the TwiML before this service is even connected, and the two must
- * match or the caller hears the salon introduce itself twice.
- *
- * Chat has no such constraint, and a chat window opens on a page that already
- * says whose salon it is — so it can say who is answering and what it is good
- * for, which "you've reached the salon" does not.
- */
-const openingLine = (channel: "PHONE" | "CHAT", salonName: string) =>
-  channel === "CHAT"
-    ? `Hi, I'm ${salonName}'s assistant. Ask me anything about our services, or tell me what you'd like booked and I'll take care of it.`
-    : GREETING;

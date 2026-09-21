@@ -6,6 +6,24 @@ export interface Salon {
   organizationId: number;
   name: string;
   timezone: string;
+  /**
+   * Whether a real organization was found.
+   *
+   * False means the number belongs to no salon and the configured fallback is
+   * not a salon either — there is no catalogue, no diary and nothing to answer
+   * with. The name reads "the salon" in that case, which is a placeholder and
+   * not evidence of anything.
+   */
+  found: boolean;
+  /**
+   * The salon's own line, for a caller who asks to speak to someone.
+   *
+   * Its second number when it has one, otherwise the main line. A salon that
+   * forwards its main line here unconditionally will send a transfer straight
+   * back to this service and round again — the second number is the way out
+   * of that, which is why it is preferred when set.
+   */
+  staffPhone: string | null;
 }
 
 /**
@@ -18,10 +36,11 @@ const tail = (phone: string) => phone.replace(/\D/g, "").slice(-9);
 /**
  * Which salon was dialled.
  *
- * On a forwarded call Twilio tells us both numbers: `to` is the number the
- * salon forwards into, `forwardedFrom` is the salon's own line that the
- * customer actually rang. The salon's own line is the one stored against the
- * organization, so it is tried first.
+ * Two arrangements, and both are read. A salon can publish a Twilio number
+ * that only this service answers — `assistantPhone` — and keep its own line
+ * free to be rung when a caller asks for a person. Or it can forward its
+ * existing number here, in which case `forwardedFrom` names it; that works,
+ * but a transfer then risks looping back through the forward.
  *
  * Done once at setup and kept on the session. Looking it up again mid-call
  * would be a database round trip in the middle of a sentence, and the answer
@@ -42,11 +61,18 @@ export const salonForCall = async (
     const matches = await prisma.organization.findMany({
       where: {
         OR: [
+          { assistantPhone: { endsWith: digits } },
           { phone: { endsWith: digits } },
           { secondaryPhone: { endsWith: digits } },
         ],
       },
-      select: { id: true, name: true, timezone: true },
+      select: {
+        id: true,
+        name: true,
+        timezone: true,
+        phone: true,
+        secondaryPhone: true,
+      },
       orderBy: { id: "asc" },
     });
 
@@ -63,6 +89,8 @@ export const salonForCall = async (
           organizationId: found.id,
           name: found.name ?? "the salon",
           timezone: found.timezone,
+          found: true,
+          staffPhone: found.secondaryPhone ?? found.phone,
         },
         matchedOn: label,
       };
@@ -84,13 +112,21 @@ export const salonForCall = async (
 export const salonById = async (organizationId: number): Promise<Salon> => {
   const organization = await prisma.organization.findUnique({
     where: { id: organizationId },
-    select: { id: true, name: true, timezone: true },
+    select: {
+      id: true,
+      name: true,
+      timezone: true,
+      phone: true,
+      secondaryPhone: true,
+    },
   });
 
   return {
     organizationId,
     name: organization?.name ?? "the salon",
     timezone: organization?.timezone ?? DEFAULT_TIMEZONE,
+    found: Boolean(organization),
+    staffPhone: organization?.secondaryPhone ?? organization?.phone ?? null,
   };
 };
 

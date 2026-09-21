@@ -80,6 +80,13 @@ export interface CallSession {
    * the model looking for a service instead of for their booking.
    */
   lastIntent: string | null;
+  /**
+   * Set when the receptionist has agreed to put the caller through.
+   *
+   * The tool cannot do it itself: handing over means closing the socket with a
+   * reason, which only the connection holding it can do.
+   */
+  transferring: boolean;
   /** Set once the booking is made, so a second attempt cannot go through. */
   bookingPublicId: string | null;
   waitlisted: boolean;
@@ -120,6 +127,7 @@ export const newSession = (
   rejectedAddons: [],
   managing: null,
   lastIntent: null,
+  transferring: false,
   bookingPublicId: null,
   waitlisted: false,
   checksThisTurn: 0,

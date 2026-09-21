@@ -50,6 +50,9 @@ export const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4o";
 /** The wss:// address Twilio is told to connect to. */
 export const relayUrl = () => `${PUBLIC_URL.replace(/^http/, "ws")}/stream`;
 
+/** Where Twilio asks what to do once the receptionist lets go of the call. */
+export const handoffUrl = () => `${PUBLIC_URL}/handoff`;
+
 /** Where beauta-api lives. Bookings go through it, never straight to the database. */
 export const BEAUTA_API_URL = (
   process.env.BEAUTA_API_URL ?? "http://localhost:3001"
@@ -84,3 +87,16 @@ export const CHAT_ORIGINS = (process.env.CHAT_ORIGINS ?? "")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+
+/**
+ * Where to send a call this service cannot serve.
+ *
+ * A number that matches no salon leaves the receptionist with no price list
+ * and no diary, so it must not answer. With this set the caller is put through
+ * to a person; without it they are told plainly and the call ends. Either is
+ * better than an assistant improvising about a salon it knows nothing about.
+ *
+ * Never derived from the call itself: on a forwarded call the salon's own line
+ * is what forwarded it, so dialling that would loop.
+ */
+export const FORWARD_UNKNOWN_TO = process.env.FORWARD_UNKNOWN_TO ?? "";

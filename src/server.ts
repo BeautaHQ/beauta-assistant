@@ -16,6 +16,7 @@ import {
 import { incomingCallRouter } from "./routes/IncomingCallRoute";
 import { conversationRelayRouter } from "./routes/ConversationRelayRoute";
 import { conversationRouter } from "./routes/ConversationRoute";
+import { handoffRouter } from "./routes/HandoffRoute";
 
 /**
  * Beauta's phone line.
@@ -75,6 +76,7 @@ export const buildServer = () => {
 
   app.register(async (instance) => {
     incomingCallRouter(instance);
+    handoffRouter(instance);
     conversationRelayRouter(instance);
   });
 

@@ -295,6 +295,15 @@ model Organization {
   secondaryPhone     String? @map("secondary_phone")
   secondaryPhoneNote String? @map("secondary_phone_note")
 
+  /// The number the AI receptionist answers on — a Twilio number, published to
+  /// customers in place of the salon's own.
+  ///
+  /// Kept apart from `phone` so a transfer has somewhere safe to go: a caller
+  /// who asks for a person is put through to `phone`, which rings the salon
+  /// because nothing forwards it back here. A salon that merely forwards its
+  /// existing number to Twilio instead leaves this null, and then a transfer
+  /// risks looping through that forward.
+  assistantPhone             String?                     @unique @map("assistant_phone")
   coverImage                 String?                     @map("cover_image")
   website                    String?
   bookingPolicyNote          String?                     @map("booking_policy_note")

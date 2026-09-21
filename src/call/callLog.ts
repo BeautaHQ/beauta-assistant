@@ -31,6 +31,9 @@ export const openCall = async (session: CallSession): Promise<void> => {
 const outcomeOf = (session: CallSession) => {
   if (session.bookingPublicId) return "BOOKED" as const;
   if (session.waitlisted) return "WAITLISTED" as const;
+  // Worth its own outcome: a salon reading the log needs to tell a call it was
+  // handed cleanly from one where the caller simply went away.
+  if (session.transferring) return "TRANSFERRED" as const;
   return "NO_ACTION" as const;
 };
 
