@@ -231,6 +231,37 @@ export const runTool = async (
 ): Promise<string> => {
   const answer = await dispatch(name, args, session);
   session.toolsThisTurn.push({ name, args, result: answer });
+
+  /*
+   * A failed tool is always written down, whether or not anyone is debugging.
+   *
+   * The model turns one into "I can't reach the diary right now" and moves on,
+   * which is the right thing to say to a caller and tells whoever reads the
+   * logs nothing at all. A real call ended up transferred to the salon and the
+   * only record of why was that sentence.
+   *
+   * Refusals go here too — a booking stopped by a guard is worth seeing, and
+   * they are rare.
+   */
+  try {
+    const parsed = JSON.parse(answer) as { ok?: boolean; error?: string; note?: string };
+    if (parsed.ok === false) {
+      console.error(
+        JSON.stringify({
+          level: 40,
+          event: "tool_refused",
+          tool: name,
+          error: parsed.error,
+          note: parsed.note,
+          conversationId: session.conversationId,
+          callSid: session.callSid,
+        }),
+      );
+    }
+  } catch {
+    // Not JSON, so not one of ours to interpret.
+  }
+
   if (process.env.VOICE_DEBUG) {
     console.error(`  -> ${name}(${JSON.stringify(args)})`);
     console.error(`     ${answer.slice(0, 300)}`);
