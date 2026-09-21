@@ -93,6 +93,26 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 
 type Args = Record<string, any>;
 
+/**
+ * Extras only exist against the service that lists them.
+ *
+ * The price list shows them nested under each service, but prose is not a
+ * constraint: the same extra appears under a dozen services, and nothing in
+ * the wording stops one being attached to a service that does not offer it.
+ * beauta-api takes the ids as given, so the booking would simply come out
+ * wrong — a price and a duration for something the salon does not do.
+ */
+const strayAddons = (
+  session: CallSession,
+  serviceId: number,
+  addonIds: number[] | undefined,
+): number[] => {
+  const allowed = session.catalogue?.addonsByService.get(serviceId);
+  if (!allowed) return [];
+  const ids = new Set(allowed.map((addon) => addon.id));
+  return (addonIds ?? []).filter((id) => !ids.has(id));
+};
+
 /** A refusal the model can act on: what was wrong, and what to do instead. */
 const refuse = (error: string, note: string, extra: Args = {}) =>
   JSON.stringify({ ok: false, error, note, ...extra });
@@ -159,11 +179,24 @@ const dispatch = async (
         }
         session.checksThisTurn += 1;
 
+        const stray = strayAddons(session, args.serviceId, session.booking.addonIds);
+        if (stray.length > 0) {
+          return refuse(
+            "addon_not_for_service",
+            `Extras ${stray.join(", ")} are not listed under that service. Offer only the ones under it in the price list.`,
+          );
+        }
+
         const result = await checkAvailability({
           organizationId: session.salon.organizationId,
           serviceId: args.serviceId,
           date: args.date,
-          addonIds: args.addonIds,
+          // From the booking, not from the arguments: the extras and the number
+          // of people were settled before the diary was asked anything, and a
+          // model that forgets to repeat them would get times for a shorter
+          // appointment than the one it is about to make.
+          addonIds: session.booking.addonIds,
+          quantity: session.booking.quantity ?? 1,
         });
 
         // Remembered so create_booking can be held to it.
@@ -202,6 +235,14 @@ const dispatch = async (
           addonIds: args.addonIds ?? [],
           confirmed: args.callerConfirmed === true,
         });
+
+        const strayOnBooking = strayAddons(session, wanted.serviceId!, wanted.addonIds);
+        if (strayOnBooking.length > 0) {
+          return refuse(
+            "addon_not_for_service",
+            `Extras ${strayOnBooking.join(", ")} are not listed under that service. Drop them or pick ones that are.`,
+          );
+        }
 
         const gaps = missingFields(wanted);
         if (gaps.length > 0) {
@@ -261,6 +302,7 @@ const dispatch = async (
           date: wanted.date!,
           time: wanted.time!,
           addonIds: wanted.addonIds,
+          quantity: wanted.quantity ?? 1,
         });
 
         if (!stillFree?.isAvailable) {
@@ -279,6 +321,7 @@ const dispatch = async (
           phone: wanted.phone!,
           serviceId: wanted.serviceId!,
           addonIds: wanted.addonIds,
+          quantity: wanted.quantity ?? 1,
           startTime: `${wanted.date} ${wanted.time}`,
           customerNotes:
             session.channel === "CHAT"

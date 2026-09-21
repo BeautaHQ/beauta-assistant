@@ -11,6 +11,17 @@ export interface BookingState {
   serviceId: number | null;
   serviceName: string | null;
   addonIds: number[];
+  /** What the extras are called, so they can be read back without a lookup. */
+  addonNames: string[];
+  /**
+   * How many people the booking is for.
+   *
+   * Null until asked, and that is what marks the extras turn as still to come:
+   * the same turn settles both, so one of them standing in for the pair saves
+   * carrying a second flag. It is not bookkeeping — two people need two staff
+   * free at once, so the diary must be asked about the right number.
+   */
+  quantity: number | null;
   /** YYYY-MM-DD in the salon's timezone. */
   date: string | null;
   /** HH:mm, 24-hour, and only ever one check_availability returned. */
@@ -32,6 +43,8 @@ export const emptyBooking = (): BookingState => ({
   serviceId: null,
   serviceName: null,
   addonIds: [],
+  addonNames: [],
+  quantity: null,
   date: null,
   time: null,
   firstName: null,
@@ -48,6 +61,8 @@ export const BOOKING_SCHEMA = {
     "serviceId",
     "serviceName",
     "addonIds",
+    "addonNames",
+    "quantity",
     "date",
     "time",
     "firstName",
@@ -61,7 +76,16 @@ export const BOOKING_SCHEMA = {
       description: "An id from list_services. Never invented.",
     },
     serviceName: { type: ["string", "null"] },
-    addonIds: { type: "array", items: { type: "integer" } },
+    addonIds: {
+      type: "array",
+      items: { type: "integer" },
+      description: "Extra ids from the price list. Empty when they want none.",
+    },
+    addonNames: { type: "array", items: { type: "string" } },
+    quantity: {
+      type: ["integer", "null"],
+      description: "How many people. 1 unless they said otherwise.",
+    },
     date: { type: ["string", "null"], description: "YYYY-MM-DD" },
     time: {
       type: ["string", "null"],
@@ -106,7 +130,15 @@ export const mergeBooking = (
   return {
     serviceId: update.serviceId ?? current.serviceId,
     serviceName: real(update.serviceName) ?? current.serviceName,
-    addonIds: update.addonIds?.length ? update.addonIds : current.addonIds,
+    // An empty array is an answer here — "no extras" — so it only counts once
+    // the extras turn has happened, which is what quantity marks.
+    addonIds: update.addonIds?.length
+      ? update.addonIds
+      : update.quantity != null
+        ? (update.addonIds ?? [])
+        : current.addonIds,
+    addonNames: update.addonNames?.length ? update.addonNames : current.addonNames,
+    quantity: update.quantity ?? current.quantity,
     date: real(update.date) ?? current.date,
     time: real(update.time) ?? current.time,
     firstName: real(update.firstName) ?? current.firstName,
@@ -120,6 +152,7 @@ export const mergeBooking = (
 export const missingFields = (booking: BookingState): string[] => {
   const gaps: string[] = [];
   if (!booking.serviceId) gaps.push("service");
+  if (booking.quantity === null) gaps.push("extras and how many people");
   if (!booking.date) gaps.push("date");
   if (!booking.time) gaps.push("time");
   if (!booking.firstName?.trim() || !booking.lastName?.trim()) gaps.push("full name");

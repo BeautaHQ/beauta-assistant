@@ -60,11 +60,14 @@ export const checkAvailability = (params: {
   serviceId: number;
   date: string;
   addonIds?: number[];
+  /** Two people need two staff free at once, so the diary must be asked for both. */
+  quantity?: number;
 }) => {
   const query = new URLSearchParams({
     serviceId: String(params.serviceId),
     date: params.date,
     organizationId: String(params.organizationId),
+    quantity: String(params.quantity ?? 1),
   });
   for (const id of params.addonIds ?? []) query.append("addonIds", String(id));
 
@@ -100,6 +103,7 @@ export const isSlotFree = (params: {
   date: string;
   time: string;
   addonIds?: number[];
+  quantity?: number;
 }) =>
   call<{ isAvailable: boolean }>(`/api/v1/availability/check`, {
     method: "POST",
@@ -109,7 +113,7 @@ export const isSlotFree = (params: {
       date: params.date,
       time: params.time,
       organizationId: params.organizationId,
-      quantity: 1,
+      quantity: params.quantity ?? 1,
     }),
   });
 
@@ -122,6 +126,7 @@ export const createBooking = (input: {
   serviceId: number;
   addonIds: number[];
   startTime: string;
+  quantity?: number;
   customerNotes?: string | null;
   /** Which channel took the booking, so the salon can tell it from the website. */
   source: "AI_CALL" | "AI_CHAT";
@@ -136,7 +141,7 @@ export const createBooking = (input: {
         // Required by the schema, and a phone caller rarely spells one out.
         email: input.email ?? null,
         status: "SCHEDULED",
-        quantity: 1,
+        quantity: input.quantity ?? 1,
         reminderEnabled: true,
         bookingPaymentType: "IN_PERSON",
       }),

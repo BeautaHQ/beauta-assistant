@@ -9,6 +9,42 @@ import { runTool, TOOLS } from "./tools";
 
 const client = new OpenAI({ apiKey: OPENAI_API_KEY });
 
+/**
+ * Drop extras the chosen service does not offer, and remember which.
+ *
+ * Done the moment the model fills the booking in, not later when a tool
+ * refuses it. The service is still what the caller asked for, so it stays; only
+ * the extras that do not belong to it go, and their names are kept so the next
+ * turn can say what happened and offer what is actually available.
+ *
+ * The price list already shows extras nested under each service, but prose is
+ * not a constraint — the same extra appears under a dozen services, and a
+ * model reading quickly attaches one to a service that never listed it.
+ */
+const pruneStrayAddons = (session: CallSession) => {
+  session.rejectedAddons = [];
+
+  const { serviceId, addonIds, addonNames } = session.booking;
+  const allowed = serviceId ? session.catalogue?.addonsByService.get(serviceId) : null;
+  if (!allowed || addonIds.length === 0) return;
+
+  const ids = new Set(allowed.map((addon) => addon.id));
+  const keptIds: number[] = [];
+  const keptNames: string[] = [];
+
+  addonIds.forEach((id, index) => {
+    if (ids.has(id)) {
+      keptIds.push(id);
+      if (addonNames[index]) keptNames.push(addonNames[index]!);
+      return;
+    }
+    session.rejectedAddons.push(addonNames[index] ?? `extra ${id}`);
+  });
+
+  session.booking.addonIds = keptIds;
+  session.booking.addonNames = keptNames;
+};
+
 /*
  * The reasoning models refuse function tools on chat completions unless
  * reasoning is switched off — and a phone call could not afford it anyway,
@@ -129,6 +165,7 @@ export const streamReply = async (
           endCall?: boolean;
         };
         session.booking = mergeBooking(session.booking, parsed.booking);
+        pruneStrayAddons(session);
 
         const intent = parsed.intent ?? "OTHER";
 

@@ -12,6 +12,15 @@ import { listAddons, listServices } from "../clients/beautaApi";
 export interface Catalogue {
   text: string;
   serviceIds: Set<number>;
+  /**
+   * Which extras belong to which service.
+   *
+   * Kept apart from the text because the text is for reading and this is for
+   * checking. Extras are per service, and the same one appears under many of
+   * them — nothing about the prose stops a model attaching Cat Eyes, listed
+   * under the acrylics, to a gel removal that does not offer it.
+   */
+  addonsByService: Map<number, { id: number; name: string; price: number }[]>;
 }
 
 interface Cached {
@@ -59,6 +68,16 @@ const build = async (organizationId: number): Promise<Catalogue> => {
   return {
     text: lines.join("\n"),
     serviceIds: new Set(services.map((service) => service.id)),
+    addonsByService: new Map(
+      services.map((service, index) => [
+        service.id,
+        (addonsByService[index] ?? []).map((addon) => ({
+          id: addon.id,
+          name: addon.name,
+          price: addon.price,
+        })),
+      ]),
+    ),
   };
 };
 

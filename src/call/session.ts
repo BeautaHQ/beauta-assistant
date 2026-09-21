@@ -54,6 +54,15 @@ export interface CallSession {
    * model booked a caller who had done no more than say their name.
    */
   reviewed: boolean;
+  /**
+   * Extras the caller asked for that their service does not offer.
+   *
+   * Stripped from the booking as they arrive rather than refused later: the
+   * service is still what they wanted, so it is kept, and only the extras that
+   * do not belong to it are dropped. Held here so the next turn can say which
+   * ones went and what is actually on offer.
+   */
+  rejectedAddons: string[];
   /** Set once the booking is made, so a second attempt cannot go through. */
   bookingPublicId: string | null;
   waitlisted: boolean;
@@ -91,6 +100,7 @@ export const newSession = (
   booking: { ...emptyBooking(), phone: channel === "PHONE" ? phone : null },
   offered: null,
   reviewed: false,
+  rejectedAddons: [],
   bookingPublicId: null,
   waitlisted: false,
   checksThisTurn: 0,

@@ -94,6 +94,7 @@ Never announce that you are about to do something. "Let me check" and "one momen
 WHAT THIS TURN IS FOR
 Decide "intent" before you write a word, because it decides whether you touch the diary. Nothing is booked until the last one.
   CLARIFY — more than one thing on the price list could be what they asked for. "Dipping" is two services at $60 and $75; "gel" is nine, from a $20 removal to an $80 set. Put the choice to them, in whatever way separates the ones they might have meant — natural nails or extensions, hands or toes, the price. Leave serviceId null until they have said. No tool.
+  ADDONS — the service is settled and you are offering the extras that go with it, and asking how many people it is for. The extras are listed under that service in the price list, with their ids and prices; nothing else can be added to it. Offer them once, take no for an answer, and settle the number in the same turn. No tool.
   CHECK_AVAILABILITY — they named or changed a day or a time. The diary has to be read THIS turn: call check_availability before you answer. "How about tomorrow?" is this, and so is "book me in at ten to five tomorrow" — naming a day or a time makes it this, whatever else they said around it, and however much it sounds like a booking.
   ASK_SLOT — you already have that day's times and you are telling the caller about them. How you put it is your judgement. No tool.
   ASK_INFO — the service, day and time are settled and you are asking for their first and last name. Nothing else is collected here, and nothing is booked. No tool.
@@ -102,7 +103,9 @@ Decide "intent" before you write a word, because it decides whether you touch th
   FAQ — a question about the salon: what a service costs, how long it takes, what you offer. Answer from the price list. No tool.
   OTHER — hello, thanks, goodbye, or anything that fits none of the above.
 
-The order is CLARIFY if needed, then CHECK_AVAILABILITY / ASK_SLOT, then ASK_INFO, then REVIEW, then CONFIRM. You cannot book without having gone through REVIEW, and you will be refused if you try.
+The order is CLARIFY if needed, then ADDONS, then CHECK_AVAILABILITY / ASK_SLOT, then ASK_INFO, then REVIEW, then CONFIRM.
+
+ADDONS comes before the diary is asked anything, and that is not arbitrary: an extra makes the appointment longer and a second person needs a second pair of hands, so times looked up before they are settled are times for a different booking. You cannot book without having gone through REVIEW, and you will be refused if you try.
 
 These are stages to pass through, not turns to spend. If the caller's answer completes a stage, that stage is over: record it and do the next one in the same breath. Asking again for something you have just been told is the one thing that makes a caller hang up.
 
@@ -153,6 +156,7 @@ export const REPLY_FORMAT = {
           enum: [
             "FAQ",
             "CLARIFY",
+            "ADDONS",
             "CHECK_AVAILABILITY",
             "ASK_SLOT",
             "ASK_INFO",
@@ -175,6 +179,41 @@ export const REPLY_FORMAT = {
     },
   },
 } as const;
+
+/**
+ * The extras that belong to the chosen service, and any that were thrown out.
+ *
+ * Only for the service actually chosen. The price list carries every service's
+ * extras, which is the right thing to hand over before one is picked and the
+ * wrong thing after: the model has to offer from one short list, not from a
+ * hundred and forty five lines.
+ *
+ * When something was thrown out, the caller has already been told it is coming
+ * — so the correction has to reach them, with the real options beside it.
+ */
+const extrasLines = (session: CallSession): string[] => {
+  const { serviceId } = session.booking;
+  if (!serviceId) return [];
+
+  const lines: string[] = [];
+  const available = session.catalogue?.addonsByService.get(serviceId) ?? [];
+
+  lines.push(
+    available.length === 0
+      ? "extras for this service: none, it takes no extras"
+      : `extras for this service: ${available
+          .map((addon) => `${addon.id}:${addon.name} $${addon.price}`)
+          .join("; ")}`,
+  );
+
+  if (session.rejectedAddons.length > 0) {
+    lines.push(
+      `DROPPED: ${session.rejectedAddons.join(", ")} — not offered with this service, so they are off the booking. Tell the caller, and offer what is above instead.`,
+    );
+  }
+
+  return lines;
+};
 
 /**
  * What is known about the diary, and whether it still applies.
@@ -213,6 +252,8 @@ const availabilityLine = (session: CallSession): string => {
  * instead.
  */
 const NEXT_STEP: Record<string, string> = {
+  "extras and how many people":
+    "Name the extras listed under the service they chose — with their prices — and ask in the same breath whether it is just for them. Record any they want in addonIds and addonNames, and the number of people in quantity; if they want no extras, leave addonIds empty and still set quantity, which is how this step is marked done. Do not offer an extra that is not listed under their service.",
   service:
     "Work out which service they mean from the price list and record its id — but only if exactly one fits what they said. If two or more could, that turn is CLARIFY: offer them the choice and leave serviceId null.",
   date: "Settle which day they want and record it as YYYY-MM-DD.",
@@ -222,7 +263,7 @@ const NEXT_STEP: Record<string, string> = {
   "full name":
     "If they have just given their name — \"Sarah Nguyen\" is both halves — record firstName and lastName and go straight on to REVIEW in this same turn. Only if you still do not have it, ask for their first and last name, and nothing else; that asking turn is ASK_INFO, and it books nothing.",
   confirmation:
-    "Read the whole booking back — the service, any extras, the day, the time, and their first and last name — then ask them to confirm. This turn is REVIEW and it does not book. Say \"I have you down for\", never \"I have you booked\": nothing is booked until they say yes, and telling them otherwise is a promise you have not kept.",
+    "Read the whole booking back — the service, any extras, how many people if more than one, the day, the time, and their first and last name — then ask them to confirm. This turn is REVIEW and it does not book. Say \"I have you down for\", never \"I have you booked\": nothing is booked until they say yes, and telling them otherwise is a promise you have not kept.",
 };
 
 /**
@@ -253,6 +294,7 @@ Answer anything else they ask, then say goodbye and set endCall.`;
     JSON.stringify(booking),
     `caller's phone (already known, never ask): ${session.phone}`,
     availabilityLine(session),
+    ...extrasLines(session),
   ];
 
   if (session.waitlisted) lines.push("they are already on the waitlist");
