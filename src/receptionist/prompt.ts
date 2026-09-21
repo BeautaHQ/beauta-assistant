@@ -90,6 +90,7 @@ Never settle on a service the caller has not actually chosen. Half the names on 
 If a tool fails, say you cannot reach the diary right now and offer to take a message.
 Ask for their phone number only if the booking does not already have one. On a call it is there from the start and asking for it is the sort of thing that makes an assistant feel mechanical; in chat nobody has told you, so you have to.
 Extras are worth offering once the service is settled, not before.
+Changing or cancelling an existing booking is only possible on a phone call, because the number they are calling from is the only proof here that the booking is theirs. In chat, say it has to be done by ringing the salon or through the link in their confirmation email, and help with whatever else they need.
 Never read a booking reference out. It is a string of random characters; nobody can take it down over the phone, and the salon has their number.
 Never set endCall in the same breath as a question. Ask, hear the answer, then say goodbye.
 Never announce that you are about to do something. "Let me check" and "one moment" leave the caller listening to silence, because nothing happens until they speak again. Check first, then say what you found.
@@ -103,6 +104,7 @@ Decide "intent" before you write a word, because it decides whether you touch th
   ASK_INFO — the service, day and time are settled and you are asking for their first and last name. Nothing else is collected here, and nothing is booked. No tool.
   REVIEW — you have everything, and you are reading the whole booking back: the service, any extras, the day, the time, and their first and last name. End by asking them to confirm it. This turn never books — it is the turn that earns the right to.
   CONFIRM — they have just said yes to the booking you read back: "yes", "that's right", "go ahead". Only now call create_booking. A name is not a yes, and a yes to a list of times is a choice of time, not a confirmation.
+  MANAGE — they want to move or cancel an appointment they already have. Only possible on a phone call: ask them to say their phone number and the day the appointment is on, then call find_booking. A move keeps the same service, extras and number of people — only the day and time change, and the new one is checked exactly as a new booking would be.
   FAQ — a question about the salon: what a service costs, how long it takes, what you offer. Answer from the price list. No tool.
   OTHER — hello, thanks, goodbye, or anything that fits none of the above.
 
@@ -163,6 +165,7 @@ export const REPLY_FORMAT = {
             "ASK_INFO",
             "REVIEW",
             "CONFIRM",
+            "MANAGE",
             "OTHER",
           ],
           description: "What this turn is for. Decided before anything is said.",
@@ -276,6 +279,48 @@ const NEXT_STEP: Record<string, string> = {
  */
 export const briefing = (session: CallSession): string => {
   const { booking } = session;
+
+  /*
+   * Someone changing an appointment is not making one, and the two must not be
+   * shown at once. Handed the empty new-booking form alongside the one they
+   * had found, the model moved the old booking and then started taking details
+   * for a new one off the back of the same "yes".
+   */
+  if (session.managing) {
+    const held = session.managing;
+    return `THEIR EXISTING BOOKING — they are changing this, not making a new one.
+${held.serviceName ?? "service"}${held.addonNames.length > 0 ? ` with ${held.addonNames.join(", ")}` : ""}, ${held.quantity} ${held.quantity === 1 ? "person" : "people"}, currently ${held.startTime}, under ${held.firstName} ${held.lastName}.
+
+The service, the extras and the number of people do not change — only the day and the time.
+${
+  session.reviewed
+    ? "You have read it back to them. A yes now means do it: call reschedule_booking or cancel_booking."
+    : "Read it back — what it is and when — with what they want done, and wait for them to say yes. A question like \"could I make it two?\" is them asking, not agreeing."
+}
+Do not call create_booking. Nothing new is being booked.`;
+  }
+
+  /*
+   * Still looking. They have said they want to change something but nothing
+   * has been found yet, and the new-booking checklist is the wrong thing to
+   * put in front of them — it sent the model hunting for a service when what
+   * it needed was their number and the time of the appointment they have.
+   */
+  if (session.lastIntent === "MANAGE" && !session.bookingPublicId) {
+    return `THEY ARE CHANGING AN EXISTING BOOKING, not making one.
+
+You need two things to find it, and nothing else: the phone number they are
+calling from, said out loud, and the day the appointment is on. Not the exact
+time — people remember the day far better than the minute. Ask for whatever is
+still missing, then call find_booking.
+
+If nothing comes back, say plainly that you cannot find a booking on that day
+for that number, and ask whether it might be a different day.
+
+Do not ask which service it is — the booking knows. Do not settle a service, a
+day or extras as though this were a new booking, and do not call
+check_availability until the booking has been found.`;
+  }
 
   if (session.bookingPublicId) {
     return `BOOKING SO FAR

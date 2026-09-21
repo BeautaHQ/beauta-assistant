@@ -10,6 +10,18 @@ import { runTool, TOOLS } from "./tools";
 const client = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 /**
+ * What chat says instead of changing a booking.
+ *
+ * Written here rather than left to the model: the rule is about what this
+ * channel can prove, not about what sounds reasonable, so it should read the
+ * same every time and never be talked around.
+ */
+const CHAT_CANNOT_MANAGE =
+  "I can't change or cancel a booking over chat — we can only do that over the phone, " +
+  "where we can see the number you're calling from. Please ring the salon, or use the link " +
+  "in your confirmation email. Is there anything else I can help you with?";
+
+/**
  * Drop extras the chosen service does not offer, and remember which.
  *
  * Done the moment the model fills the booking in, not later when a tool
@@ -65,6 +77,7 @@ export type Intent =
   | "ASK_INFO"
   | "REVIEW"
   | "CONFIRM"
+  | "MANAGE"
   | "OTHER";
 
 export interface Reply {
@@ -168,6 +181,7 @@ export const streamReply = async (
         pruneStrayAddons(session);
 
         const intent = parsed.intent ?? "OTHER";
+        session.lastIntent = intent;
 
         /*
          * The right to book is earned on the turn the booking is read out, and
@@ -182,11 +196,13 @@ export const streamReply = async (
          * yes, or it does not count.
          */
         const outstanding = missingFields(session.booking);
-        if (
-          intent === "REVIEW" &&
-          outstanding.every((gap) => gap === "confirmation")
-        ) {
-          session.reviewed = true;
+        if (intent === "REVIEW") {
+          // A booking being changed is already whole; the only thing the
+          // caller has to hear is which one, and what is about to happen to it.
+          if (session.managing) session.reviewed = true;
+          else if (outstanding.every((gap) => gap === "confirmation")) {
+            session.reviewed = true;
+          }
         }
         /*
          * Whether the turn talked about a day whose times it never looked up.
@@ -204,6 +220,26 @@ export const streamReply = async (
         const aboutTimes = intent === "CHECK_AVAILABILITY" || intent === "ASK_SLOT";
         const haveTimes =
           session.offered !== null && session.offered.date === session.booking.date;
+
+        /*
+         * A chat turn about changing a booking does not get to improvise.
+         *
+         * The tools already refuse, but only once one is called — and a model
+         * that talks its way through the turn without calling anything would
+         * never meet them. Chat cannot prove whose booking it is, so the answer
+         * is fixed and does not come from the model at all.
+         *
+         * Safe to overwrite because nothing has been spoken yet: chat collects
+         * the whole reply before showing it, and this never fires on a call.
+         */
+        if (session.channel === "CHAT" && intent === "MANAGE") {
+          return {
+            say: CHAT_CANNOT_MANAGE,
+            intent,
+            endCall: false,
+            brokePromise: false,
+          };
+        }
 
         return {
           say: parsed.say ?? spoken.value,

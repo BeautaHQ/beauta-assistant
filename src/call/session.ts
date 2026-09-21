@@ -1,3 +1,4 @@
+import type { FoundBooking } from "../clients/beautaApi";
 import { emptyBooking, type BookingState } from "./booking";
 import type { Catalogue } from "../salon/catalogue";
 import type { Salon } from "../salon/lookup";
@@ -63,6 +64,22 @@ export interface CallSession {
    * ones went and what is actually on offer.
    */
   rejectedAddons: string[];
+  /**
+   * An existing booking this caller has proved is theirs, when they rang to
+   * change or cancel one. Null until the day and time they gave matched a
+   * booking against their own caller ID.
+   */
+  managing: FoundBooking | null;
+  /**
+   * What the last turn was for.
+   *
+   * The briefing is built before the model answers, so it is always a turn
+   * behind — and without this it cannot tell a caller who is halfway through
+   * changing a booking from one who has said nothing yet. It offered the
+   * new-booking checklist to someone asking to move an appointment, which sent
+   * the model looking for a service instead of for their booking.
+   */
+  lastIntent: string | null;
   /** Set once the booking is made, so a second attempt cannot go through. */
   bookingPublicId: string | null;
   waitlisted: boolean;
@@ -101,6 +118,8 @@ export const newSession = (
   offered: null,
   reviewed: false,
   rejectedAddons: [],
+  managing: null,
+  lastIntent: null,
   bookingPublicId: null,
   waitlisted: false,
   checksThisTurn: 0,

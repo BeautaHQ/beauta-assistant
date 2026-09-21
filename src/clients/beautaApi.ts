@@ -22,7 +22,13 @@ const call = async <T>(
   const response = await fetch(`${BEAUTA_API_URL}${path}`, {
     ...init,
     signal: timeout,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    headers: {
+      // Only when there is something to describe. Fastify rejects a request
+      // that announces JSON and then sends nothing, which is what a PATCH with
+      // no body looks like.
+      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...(init?.headers ?? {}),
+    },
   });
 
   const body = await response.json().catch(() => null);
@@ -171,5 +177,61 @@ export const joinWaitlist = (input: {
           endTime: localDateTime(slot.endTime),
         })),
       }),
+    },
+  );
+
+export interface FoundBooking {
+  bookingPublicId: string;
+  firstName: string;
+  lastName: string;
+  serviceId: number | null;
+  serviceName: string | null;
+  addonIds: number[];
+  addonNames: string[];
+  quantity: number;
+  /** "YYYY-MM-DD HH:mm" in the salon's timezone. */
+  startTime: string;
+}
+
+/**
+ * This caller's bookings on one day.
+ *
+ * The number is the caller's own, taken from caller ID rather than from
+ * anything said during the call, so what comes back is their own day and
+ * nobody else's. The exact minute is not asked for: someone ringing up
+ * remembers "Saturday" far better than "two twenty".
+ */
+export const findBookings = (params: {
+  organizationId: number;
+  phone: string;
+  date: string;
+}) => {
+  const query = new URLSearchParams({ phone: params.phone, date: params.date });
+
+  return call<FoundBooking[]>(
+    `/api/v1/bookings/public/organization/${params.organizationId}/find?${query.toString()}`,
+  );
+};
+
+export const cancelBooking = (params: {
+  organizationId: number;
+  bookingPublicId: string;
+}) =>
+  call<unknown>(
+    `/api/v1/bookings/public/${params.bookingPublicId}/organization/${params.organizationId}/cancel`,
+    { method: "PATCH" },
+  );
+
+/** Moves an existing booking. The service, extras and party size are unchanged. */
+export const rescheduleBooking = (params: {
+  organizationId: number;
+  bookingPublicId: string;
+  newStartTime: string;
+}) =>
+  call<unknown>(
+    `/api/v1/bookings/public/organization/${params.organizationId}/${params.bookingPublicId}/reschedule`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ newStartTime: localDateTime(params.newStartTime) }),
     },
   );

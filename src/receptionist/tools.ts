@@ -1,10 +1,13 @@
 import type OpenAI from "openai";
 
 import {
+  cancelBooking,
   checkAvailability,
   createBooking,
+  findBookings,
   isSlotFree,
   joinWaitlist,
+  rescheduleBooking,
 } from "../clients/beautaApi";
 import { mergeBooking, missingFields } from "../call/booking";
 import { offerable } from "../salon/slots";
@@ -72,6 +75,47 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "find_booking",
+      description:
+        "Find the caller's existing booking so it can be moved or cancelled. Ask them to say their phone number and which day the appointment is on — not the exact time. Phone calls only.",
+      parameters: {
+        type: "object",
+        properties: {
+          phone: { type: "string", description: "The number the caller said out loud" },
+          date: { type: "string", description: "YYYY-MM-DD the appointment is on" },
+        },
+        required: ["phone", "date"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "cancel_booking",
+      description:
+        "Cancel the booking found by find_booking. Only after reading it back and hearing them say yes. Takes no arguments: it cancels the one that was found.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "reschedule_booking",
+      description:
+        "Move the booking found by find_booking to a new day and time. The service, extras and number of people do not change. Check the new time with check_availability first, as for a new booking.",
+      parameters: {
+        type: "object",
+        properties: {
+          date: { type: "string", description: "YYYY-MM-DD they want to move to" },
+          time: { type: "string", description: "HH:mm they want to move to" },
+        },
+        required: ["date", "time"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "join_waitlist",
       description:
         "Put the caller on the waitlist for a day that is full, so the salon can ring them if something frees up. Offer this when check_availability comes back empty.",
@@ -92,6 +136,47 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 ];
 
 type Args = Record<string, any>;
+
+/**
+ * Nothing is moved or cancelled before the caller has heard what it is.
+ *
+ * Requiring merely a separate turn was not enough: asked "could I make it two
+ * o'clock?", the model treated the question as agreement and moved the
+ * appointment on the spot. So the same gate the new bookings use applies here
+ * — a turn the model itself labelled REVIEW, where it said out loud what it
+ * was about to do.
+ */
+const notReadBackYet = (session: CallSession, verb: string): string | null => {
+  if (session.reviewed) return null;
+  return refuse(
+    "not_read_back",
+    `Read the booking out first — what it is, when it is, and what you are about to do to it — and wait for them to say yes. "Could I make it two?" is a question, not a yes, and nothing is ${verb} until they have agreed.`,
+  );
+};
+
+/**
+ * Changing an existing booking happens on the phone or not at all.
+ *
+ * A call carries caller ID, which is the only evidence here that the person
+ * asking is the person who booked. A chat window carries nothing: whoever
+ * types a number would be treated as its owner, and cancelling a stranger's
+ * appointment would take one lucky guess at a time. So chat is told where to
+ * go instead, which is a real answer rather than a refusal.
+ */
+const onlyOnACall = (session: CallSession, what: string): string | null => {
+  if (session.channel === "PHONE") return null;
+  return refuse(
+    "chat_cannot_manage_bookings",
+    `Bookings can only be changed over the phone, so you cannot ${what} here. Tell them to ring the salon, or to use the link in their confirmation email, and offer to help with anything else.`,
+  );
+};
+
+/** Two numbers written differently. The last nine digits settle it. */
+const sameNumber = (a: string | undefined, b: string | undefined) => {
+  const digits = (value: string | undefined) => (value ?? "").replace(/\D/g, "").slice(-9);
+  const left = digits(a);
+  return left.length >= 6 && left === digits(b);
+};
 
 /**
  * Extras only exist against the service that lists them.
@@ -370,6 +455,127 @@ const dispatch = async (
         });
 
         return JSON.stringify({ ok: true, waitlisted: true });
+      }
+
+      case "find_booking": {
+        const barred = onlyOnACall(session, "find an existing booking");
+        if (barred) return barred;
+
+        /*
+         * Two locks, and neither is the model's to open.
+         *
+         * The number they read out has to be the number they are calling from,
+         * which is the part that proves who they are; then the day and time
+         * have to match a real booking, which is the part that proves they know
+         * which one. The query uses caller ID, never the spoken number, so a
+         * model that mishears cannot widen the search to someone else.
+         */
+        if (!sameNumber(args.phone, session.phone)) {
+          return refuse(
+            "phone_mismatch",
+            "That is not the number this call is coming from. Say you can only change a booking from the number it was made on, and offer to take a message.",
+          );
+        }
+
+        const found = await findBookings({
+          organizationId: session.salon.organizationId,
+          phone: session.phone,
+          date: args.date,
+        });
+
+        if (found.length === 0) {
+          return refuse(
+            "not_found",
+            `No booking on ${args.date} for that number. Say so plainly — do not search around it or guess another day. Ask whether the day might be a different one, or offer to take a message.`,
+          );
+        }
+
+        // A fresh booking to talk about, so the right to act on it starts again.
+        session.reviewed = false;
+
+        if (found.length > 1) {
+          // Their own day, so listing it is safe, and only they can tell the
+          // two apart.
+          session.managing = null;
+          return JSON.stringify({
+            ok: true,
+            several: found.map((one) => ({
+              at: one.startTime,
+              service: one.serviceName,
+            })),
+            note: "More than one that day. Ask which, then call find_booking again once they have said.",
+          });
+        }
+
+        session.managing = found[0]!;
+        return JSON.stringify({ ok: true, booking: found[0] });
+      }
+
+      case "cancel_booking": {
+        const barred = onlyOnACall(session, "cancel a booking");
+        if (barred) return barred;
+        if (!session.managing) {
+          return refuse("nothing_found", "Find the booking first with find_booking.");
+        }
+        const tooSoon = notReadBackYet(session, "cancelled");
+        if (tooSoon) return tooSoon;
+
+        await cancelBooking({
+          organizationId: session.salon.organizationId,
+          bookingPublicId: session.managing.bookingPublicId,
+        });
+
+        const cancelled = session.managing;
+        session.managing = null;
+        return JSON.stringify({ ok: true, cancelled: true, was: cancelled.startTime });
+      }
+
+      case "reschedule_booking": {
+        const barred = onlyOnACall(session, "move a booking");
+        if (barred) return barred;
+
+        const moving = session.managing;
+        if (!moving) {
+          return refuse("nothing_found", "Find the booking first with find_booking.");
+        }
+        const early = notReadBackYet(session, "moved");
+        if (early) return early;
+
+        /*
+         * The same check a new booking gets, for the same reason: the service,
+         * its extras and the number of people are unchanged, so the new time
+         * has to be free for exactly that much work. Asked here rather than
+         * trusted, because the times offered may be minutes old.
+         */
+        const free = await isSlotFree({
+          organizationId: session.salon.organizationId,
+          serviceId: moving.serviceId!,
+          date: args.date,
+          time: args.time,
+          addonIds: moving.addonIds,
+          quantity: moving.quantity,
+        });
+
+        if (!free?.isAvailable) {
+          return refuse(
+            "time_not_free",
+            `${args.time} on ${args.date} is not free for that appointment. Offer what is, or another day.`,
+          );
+        }
+
+        await rescheduleBooking({
+          organizationId: session.salon.organizationId,
+          bookingPublicId: moving.bookingPublicId,
+          newStartTime: `${args.date} ${args.time}`,
+        });
+
+        session.managing = { ...moving, startTime: `${args.date} ${args.time}` };
+        return JSON.stringify({
+          ok: true,
+          moved: true,
+          from: moving.startTime,
+          to: `${args.date} ${args.time}`,
+        });
       }
 
       default:
