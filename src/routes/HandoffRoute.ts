@@ -62,16 +62,31 @@ export const handoffRouter = (app: FastifyInstance) => {
 
       if (!salon?.staffPhone) {
         request.log.warn(
-          { event: "handoff_no_staff_number", callSid: body.CallSid },
-          "Asked for a person, but the salon has no second number",
+          {
+            event: "handoff_no_staff_number",
+            callSid: body.CallSid,
+            organizationId: salon?.organizationId ?? null,
+          },
+          "Asked for a person, but the salon has no number to dial",
         );
         return reply.send(
           '<?xml version="1.0" encoding="UTF-8"?><Response><Say>Sorry, there is no one available to take the call right now. Please try again later.</Say><Hangup/></Response>',
         );
       }
 
+      /*
+       * The number goes in the log. Without it a dropped transfer says only
+       * "putting the caller through" and then silence, and there is no way to
+       * tell a wrong number in the salon's record from a Twilio account that
+       * is not allowed to dial it.
+       */
       request.log.info(
-        { event: "handoff_to_staff", callSid: body.CallSid },
+        {
+          event: "handoff_to_staff",
+          callSid: body.CallSid,
+          organizationId: salon.organizationId,
+          dialling: salon.staffPhone,
+        },
         "Putting the caller through",
       );
       return reply.send(
