@@ -21,7 +21,50 @@ export interface Catalogue {
    * under the acrylics, to a gel removal that does not offer it.
    */
   addonsByService: Map<number, { id: number; name: string; price: number }[]>;
+  /**
+   * Every extra the salon sells, whichever service it is listed under.
+   *
+   * Flat on purpose. Whether an id is real and whether it is listed under the
+   * service someone picked are two different questions, and only the first has
+   * an answer that is ours to give — the salon puts a pedicure extra on a
+   * manicure when the customer asks for both, and that is their call.
+   */
+  addonIds: Set<number>;
+  /**
+   * The same price list as two flat lists: the services, then the extras.
+   *
+   * What `text` says is that an extra belongs under a service, which is true of
+   * how the salon prices things and not of what a customer asks for. It also
+   * repeats every extra under every service that offers it, so the one name the
+   * reader is looking for appears a dozen times over, and once as a service in
+   * its own right — a deluxe pedicure is both. Asked to pick an id out of that,
+   * the model named the extra and left the id empty.
+   *
+   * Flat, each thing appears exactly once and the choice is a lookup. The
+   * receptionist keeps the grouped version: it books with nobody watching, so
+   * what the salon does and does not put together still binds it.
+   */
+  flatText: string;
+  /**
+   * Name to id, for the service list and the extras list.
+   *
+   * The model reads the names right and then hands back the wrong id — it said
+   * DELUXE PEDICURE - NORMAL and gave the id next to DELUXE MANICURE. Picking
+   * a number out of a list by eye is the one thing it is worst at, and the one
+   * thing a map does perfectly, so the name it wrote decides the id.
+   *
+   * Keyed on the name lowercased with its spacing collapsed, because the price
+   * list has entries like "DELUXE PEDICURE  - GEL" with two spaces in it.
+   */
+  serviceIdByName: Map<string, number>;
+  addonIdByName: Map<string, number>;
+  /** The other way round, so an extra is reported in the salon's own words. */
+  addonNameById: Map<number, string>;
 }
+
+/** Lowercase, single-spaced, trimmed. Two spellings of one name become one. */
+export const nameKey = (name: string) =>
+  name.trim().toLowerCase().replace(/\s+/g, " ");
 
 interface Cached {
   at: number;
@@ -55,6 +98,39 @@ const build = async (organizationId: number): Promise<Catalogue> => {
     }),
   );
 
+  /*
+   * Every extra, once, in the order first met. The same extra is listed under
+   * many services and the reader must not be shown it many times.
+   */
+  const everyAddon = new Map<number, { id: number; name: string; price: number }>();
+  for (const addons of addonsByService) {
+    for (const addon of addons) {
+      if (!everyAddon.has(addon.id)) {
+        everyAddon.set(addon.id, {
+          id: addon.id,
+          name: addon.name,
+          price: addon.price,
+        });
+      }
+    }
+  }
+
+  const byId = <T extends { id: number }>(items: T[]) =>
+    [...items].sort((a, b) => a.id - b.id);
+
+  const flatText = [
+    "SERVICES",
+    ...byId(services).map(
+      (service) =>
+        `${service.id}. ${service.name} — ${money(service.price)}, ${service.durationMinutes} min`,
+    ),
+    "",
+    "EXTRAS",
+    ...byId([...everyAddon.values()]).map(
+      (addon) => `${addon.id}. ${addon.name} — ${money(addon.price)}`,
+    ),
+  ].join("\n");
+
   const lines = services.map((service, index) => {
     const head = `${service.id}. ${service.name} — ${money(service.price)}, ${service.durationMinutes} min`;
     const addons = addonsByService[index] ?? [];
@@ -68,6 +144,17 @@ const build = async (organizationId: number): Promise<Catalogue> => {
   return {
     text: lines.join("\n"),
     serviceIds: new Set(services.map((service) => service.id)),
+    flatText,
+    serviceIdByName: new Map(
+      services.map((service) => [nameKey(service.name), service.id]),
+    ),
+    addonIdByName: new Map(
+      [...everyAddon.values()].map((addon) => [nameKey(addon.name), addon.id]),
+    ),
+    addonNameById: new Map(
+      [...everyAddon.values()].map((addon) => [addon.id, addon.name]),
+    ),
+    addonIds: new Set(addonsByService.flat().map((addon) => addon.id)),
     addonsByService: new Map(
       services.map((service, index) => [
         service.id,

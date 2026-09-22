@@ -881,20 +881,49 @@ model StaffBlockTime {
 }
 
 model CustomerEnquiry {
-  id             Int          @id @default(autoincrement())
-  organizationId Int          @map("organization_id")
+  id             Int       @id @default(autoincrement())
+  organizationId Int       @map("organization_id")
   message        String
-  status         String       @default("NEW")
-  responseTitle  String?      @map("response_title")
-  responseBody   String?      @map("response_body")
-  respondedAt    DateTime?    @map("responded_at")
-  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
-  email          String       @map("email")
-  firstName      String       @map("first_name")
-  lastName       String       @map("last_name")
-  phone          String?      @map("phone")
-  organization   Organization @relation(fields: [organizationId], references: [id])
+  status         String    @default("NEW")
+  responseTitle  String?   @map("response_title")
+  responseBody   String?   @map("response_body")
+  respondedAt    DateTime? @map("responded_at")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  email          String    @map("email")
+  firstName      String    @map("first_name")
+  lastName       String    @map("last_name")
+  phone          String?   @map("phone")
+
+  /// What the assistant read the message as. Null until it has looked.
+  aiIntent EnquiryIntent? @map("ai_intent")
+  /// A reply the salon can send as it stands, or edit first. Never sent for them.
+  aiDraft  String?        @map("ai_draft")
+  /// What the enquiry is asking for, in fields rather than prose: the service
+  /// and extras it names, the day and time, which booking it means.
+  ///
+  /// Written once, when the message is first read. Whether it can still be
+  /// acted on is a different question with a different answer every hour, so
+  /// that is worked out afresh each time the salon opens the enquiry and is
+  /// deliberately not stored here.
+  aiAction Json?          @map("ai_action")
+  /// When the message was read. Absent means it has not been.
+  aiReadAt DateTime?      @map("ai_read_at") @db.Timestamptz(6)
+
+  /// When the salon acted on it from the enquiry itself, and what they did.
+  ///
+  /// Without this the enquiry has no memory of the click: the panel is green
+  /// again on the next refresh, offers to book what was already booked, and
+  /// the only thing standing between the customer and two appointments is
+  /// whoever happens to remember.
+  aiActedAt        DateTime?      @map("ai_acted_at") @db.Timestamptz(6)
+  /// Always one of BOOKING, RESCHEDULE or CANCEL — the other two ask for
+  /// nothing that can be done in a click.
+  aiActedAs        EnquiryIntent? @map("ai_acted_as")
+  /// The booking that came of it, where one did. Null on a cancellation.
+  aiActedBookingId Int?           @map("ai_acted_booking_id")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
 
   @@index([organizationId])
   @@index([status])
@@ -1842,6 +1871,18 @@ enum ConversationOutcome {
 enum ConversationChannel {
   PHONE
   CHAT
+}
+
+/// What the assistant judged a customer enquiry to be about.
+enum EnquiryIntent {
+  BOOKING
+  RESCHEDULE
+  CANCEL
+  FAQ
+  OTHER
+  /// Could not be made sense of, or asks for something no one appointment
+  /// covers. An answer in its own right, not a missing one.
+  ERROR
 }
 
 // One conversation with the AI receptionist.

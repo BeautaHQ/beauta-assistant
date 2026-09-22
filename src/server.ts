@@ -16,6 +16,7 @@ import {
 import { incomingCallRouter } from "./routes/IncomingCallRoute";
 import { conversationRelayRouter } from "./routes/ConversationRelayRoute";
 import { conversationRouter } from "./routes/ConversationRoute";
+import { enquiryRouter } from "./routes/EnquiryRoute";
 import { handoffRouter } from "./routes/HandoffRoute";
 
 /**
@@ -92,6 +93,14 @@ export const buildServer = () => {
 
   app.register(async (instance) => conversationRouter(instance), {
     prefix: "/api/v1/conversations",
+  });
+
+  /*
+   * Enquiries are a separate job from conversations and share none of their
+   * machinery — only the price list and the salon's clock.
+   */
+  app.register(async (instance) => enquiryRouter(instance), {
+    prefix: "/api/v1/enquiries",
   });
 
   return app;
