@@ -50,6 +50,7 @@ URL, and without the check anyone can drive this service.
       salon/               whose phone was rung
         lookup.ts              dialled number -> organization
         catalogue.ts           the price list, cached per salon
+        knowledge.ts           the salon's reference photos, cached per salon
         clock.ts               today and tomorrow in the salon's timezone
         slots.ts               free times, cut down to the ones worth saying
       clients/             things outside this process

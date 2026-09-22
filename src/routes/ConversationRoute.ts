@@ -10,6 +10,7 @@ import { GREETING } from "../config";
 import { streamReply, type Turn } from "../receptionist";
 import { getCatalogue } from "../salon/catalogue";
 import { openingLine } from "../salon/greeting";
+import { getKnowledgeImages } from "../salon/knowledge";
 import { salonById, salonForCall } from "../salon/lookup";
 
 /**
@@ -103,6 +104,10 @@ export const conversationRouter = (app: FastifyInstance) => {
                 "Which number identified the salon: forwardedFrom, to, to:ambiguous, or fallback",
             }),
             services: Type.Integer({ description: "How many services it can talk about" }),
+            photos: Type.Integer({
+              description:
+                "How many reference photos it can show. Always 0 on PHONE, where there is nothing to show them on.",
+            }),
           }),
         },
       },
@@ -142,6 +147,13 @@ export const conversationRouter = (app: FastifyInstance) => {
       session.toNumber = request.body?.to ?? null;
       session.forwardedFrom = request.body?.forwardedFrom ?? null;
       session.catalogue = await getCatalogue(salon.organizationId).catch(() => null);
+      /*
+       * Chat only. The photos exist to be shown, and there is nothing to show
+       * them on down a phone line — reading their notes to the model would be
+       * a section of prompt spent on something the caller can never see.
+       */
+      session.knowledgeImages =
+        channel === "CHAT" ? await getKnowledgeImages(salon.organizationId) : [];
 
       await openCall(session);
       calls.set(conversationId, { session, history: [], at: Date.now() });
@@ -153,6 +165,7 @@ export const conversationRouter = (app: FastifyInstance) => {
         salon,
         matchedOn,
         services: session.catalogue?.serviceIds.size ?? 0,
+        photos: session.knowledgeImages.length,
       });
     },
   );
@@ -186,6 +199,17 @@ export const conversationRouter = (app: FastifyInstance) => {
                 "True when the turn talked about times on a day whose availability it never looked up — the caller was left in silence, or told something unchecked",
             }),
             endCall: Type.Boolean({ description: "Whether it hung up after saying that" }),
+            images: Type.Array(
+              Type.Object({
+                id: Type.Integer(),
+                url: Type.String(),
+                note: Type.String({ description: "What the salon says the photo is" }),
+              }),
+              {
+                description:
+                  "The salon's photos that answer this question, to show beside `say`. Only ever filled on a CHAT FAQ turn, and usually empty even then.",
+              },
+            ),
             booking: Type.Any({ description: "The booking as it now stands" }),
             missing: Type.Array(Type.String(), {
               description: "What it still needs, in the order it will ask",
@@ -246,6 +270,7 @@ export const conversationRouter = (app: FastifyInstance) => {
           intent: "OTHER" as const,
           endCall: false,
           brokePromise: false,
+          images: [],
         };
       }
 
@@ -260,6 +285,7 @@ export const conversationRouter = (app: FastifyInstance) => {
         intent: answer.intent,
         brokePromise: answer.brokePromise,
         endCall: answer.endCall,
+        images: answer.images,
         booking: session.booking,
         missing: missingFields(session.booking),
         tools: session.toolsThisTurn.map((used) => ({

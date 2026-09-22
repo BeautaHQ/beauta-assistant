@@ -4,7 +4,8 @@ import { mergeBooking, missingFields, type BookingState } from "../call/booking"
 import { OPENAI_API_KEY, OPENAI_MODEL } from "../config";
 import { StreamingStringField } from "./jsonStream";
 import type { CallSession } from "../call/session";
-import { briefing, REPLY_FORMAT, systemPrompt } from "./prompt";
+import { imagesByIds, type KnowledgeImage } from "../salon/knowledge";
+import { briefing, replyFormat, systemPrompt } from "./prompt";
 import { runTool, TOOLS } from "./tools";
 
 const client = new OpenAI({ apiKey: OPENAI_API_KEY });
@@ -119,6 +120,15 @@ export interface Reply {
    * used to be invisible is now a flag on the turn.
    */
   brokePromise: boolean;
+  /**
+   * The salon photos to show beside the words, and usually none.
+   *
+   * Chat only, and only on a FAQ turn: a photo cannot be spoken, and the rest
+   * of a booking is a conversation about times and names that no picture
+   * helps. Resolved from the ids the model picked out of the list this
+   * conversation was shown, so an id it invented names nothing and is dropped.
+   */
+  images: KnowledgeImage[];
 }
 
 /**
@@ -159,7 +169,7 @@ export const streamReply = async (
         model: OPENAI_MODEL,
         messages,
         tools: TOOLS,
-        response_format: REPLY_FORMAT,
+        response_format: replyFormat(session),
         stream: true,
         temperature: 0.3,
         // The newer models reject max_tokens outright; this is the name they
@@ -199,6 +209,7 @@ export const streamReply = async (
           intent?: Intent;
           booking?: Partial<BookingState>;
           endCall?: boolean;
+          imageIds?: unknown;
         };
         session.booking = mergeBooking(session.booking, parsed.booking);
         pruneStrayAddons(session);
@@ -276,23 +287,40 @@ export const streamReply = async (
             intent,
             endCall: false,
             brokePromise: false,
+            images: [],
           };
         }
+
+        /*
+         * The gate is here rather than in the prompt alone. A model told to
+         * send photos only on a FAQ turn will now and then attach one to a
+         * turn about times, and a parking sign under a list of free slots is
+         * noise the customer has to read past.
+         */
+        const images =
+          session.channel === "CHAT" && intent === "FAQ"
+            ? imagesByIds(session.knowledgeImages, parsed.imageIds)
+            : [];
 
         return {
           say: parsed.say ?? spoken.value,
           intent,
           endCall: parsed.endCall === true,
           brokePromise: aboutTimes && !readTheDiary && !haveTimes,
+          images,
         };
       } catch {
         // Cut short by max_tokens: what was streamed is what the caller heard,
         // so keep it rather than throwing away a half-spoken sentence.
+        //
+        // No photos either way: `imageIds` is written after `say`, so a reply
+        // cut off mid-sentence never reached them.
         return {
           say: spoken.value,
           intent: "OTHER",
           endCall: false,
           brokePromise: false,
+          images: [],
         };
       }
     }
@@ -328,5 +356,6 @@ export const streamReply = async (
     intent: "OTHER",
     endCall: false,
     brokePromise: false,
+    images: [],
   };
 };

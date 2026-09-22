@@ -100,3 +100,29 @@ export const CHAT_ORIGINS = (process.env.CHAT_ORIGINS ?? "")
  * is what forwarded it, so dialling that would loop.
  */
 export const FORWARD_UNKNOWN_TO = process.env.FORWARD_UNKNOWN_TO ?? "";
+
+/**
+ * Where uploaded images are served from, by bucket prefix.
+ *
+ * Only the S3 key is ever stored, here as in beauta-api — a row holds
+ * `organizations/12/knowledge/images/<uuid>` and the viewable address is that
+ * key on the CDN. Kept as a rule rather than a stored URL so a CDN move is a
+ * change of environment and not a migration, and so the two services cannot
+ * drift into pointing at different copies of the same photo.
+ */
+const CDN_BEAUTA_URL = (process.env.CDN_BEAUTA_URL ?? "").replace(/\/$/, "");
+const CDN_AURABEA_URL = (process.env.CDN_AURABEA_URL ?? "").replace(/\/$/, "");
+
+/**
+ * The address a stored key is served at, or null when there is nowhere to
+ * serve it from.
+ *
+ * Null rather than a half-built URL: with no CDN configured the join would
+ * produce "/organizations/12/…", which a browser resolves against the booking
+ * site and then shows as a broken image. Nothing shown is better than that.
+ */
+export const publicUrl = (key?: string | null): string | null => {
+  if (!key) return null;
+  const base = key.startsWith("aurabea/") ? CDN_AURABEA_URL : CDN_BEAUTA_URL;
+  return base ? `${base}/${key}` : null;
+};

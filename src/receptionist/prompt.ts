@@ -13,6 +13,7 @@
  */
 import { BOOKING_SCHEMA, missingFields } from "../call/booking";
 import type { CallSession } from "../call/session";
+import type { KnowledgeImage } from "../salon/knowledge";
 import { salonDates } from "../salon/clock";
 import { describeOffer } from "../salon/slots";
 
@@ -66,7 +67,7 @@ PRICE LIST
 These ids are the only real ones. Extras are listed under the service they belong to and go with no other.
 
 ${catalogue}
-
+${photos(session)}
 THE STEPS
 1 service · 2 extras and how many people · 3 the day · 4 the time · 5 their name · 6 their number · 7 read it back, and label that turn REVIEW · 8 book it.
 Nothing books until a turn labelled REVIEW has happened, whatever else you have.
@@ -83,7 +84,7 @@ REVIEW    reading the whole booking back — service, extras, people, day, time,
 CONFIRM   they have just said yes to what you read back. Only now call create_booking. A name is not a yes; a choice of time is not a yes.
 MANAGE    moving or cancelling a booking they already have. Phone only: ask their number and which day it is on, then call find_booking. A move changes only the day and time.
 TRANSFER  they want a person, or it is beyond you — a complaint, money, anything the price list and the diary cannot answer. Say you are putting them through, then call transfer_to_staff.
-FAQ       a question you can answer from the price list.
+FAQ       a question you can answer from the price list, or from anything else the salon has on file — where to park, what a colour looks like.
 OTHER     hello, thanks, goodbye, anything else.
 
 WHEN IT GOES WRONG
@@ -98,69 +99,134 @@ YOUR ANSWER
 };
 
 /**
+ * The salon's photos, offered to the model as notes and ids.
+ *
+ * Chat only, and only when there are any. A photo cannot be shown down a phone
+ * line, and a section listing nothing is a section the model reads past on
+ * every turn of every call.
+ *
+ * The notes are all it gets. It is a text model and these are photographs, so
+ * what a question is matched against is what the salon wrote about each one —
+ * that, and an id, which is short enough to hand back without the copying
+ * mistakes a URL invites. The address never goes near the model: the id is
+ * resolved on this side afterwards, so a customer can only ever be shown a
+ * photo this salon actually uploaded.
+ */
+const photos = (session: CallSession): string => {
+  if (session.channel !== "CHAT" || session.knowledgeImages.length === 0) return "";
+
+  const lines = session.knowledgeImages
+    .map((image: KnowledgeImage) => `${image.id}: ${image.note}`)
+    .join("\n");
+
+  return `
+PHOTOS
+The salon has these photos on file. You cannot see them; this is what it wrote about each one.
+
+${lines}
+
+On a FAQ turn, and only then, put the id of a photo in "imageIds" when it genuinely answers what was asked — the customer is shown it beside your words. Still answer in words: a picture on its own is not an answer.
+One is almost always enough. Send none rather than one that is merely on the same subject, and never send an id that is not on this list — it shows nothing.
+`;
+};
+
+/**
  * The model answers in this shape rather than free text, so the reply is
  * already structured when it arrives instead of being guessed at afterwards.
  * `strict` makes the schema a guarantee, not a request.
+ *
+ * Built per conversation rather than fixed, because `imageIds` only exists
+ * where photos do. `strict` requires every declared property to come back, so
+ * declaring it on a phone call would have the model filling in a field with
+ * nothing to put in it and nobody to show it to.
  */
-export const REPLY_FORMAT = {
-  type: "json_schema",
-  json_schema: {
-    name: "receptionist_reply",
-    strict: true,
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      /*
-       * The order is the point, not decoration.
-       *
-       * Structured output is generated field by field in the order declared
-       * here, so whatever comes first is what the rest is written against.
-       * With `say` first the model wrote the whole sentence and only then
-       * labelled it — and since `say` is streamed straight to the caller as it
-       * arrives, the label could not possibly have steered the words.
-       *
-       * So intent leads. It is one or two tokens, it costs nothing, and it is
-       * the routing a separate classifying call would buy — in the same
-       * request, without its second round trip.
-       *
-       * The booking state stays behind `say`, though it would read better in
-       * front of it. Moved ahead, its forty-odd tokens of JSON have to be
-       * generated before a single word can be spoken, and first token went from
-       * under a second to nearly three. On a phone that is the caller
-       * wondering whether the line has dropped.
-       */
-      required: ["intent", "say", "booking", "endCall"],
-      properties: {
-        intent: {
-          type: "string",
-          enum: [
-            "FAQ",
-            "CLARIFY",
-            "ADDONS",
-            "CHECK_AVAILABILITY",
-            "ASK_SLOT",
-            "ASK_INFO",
-            "REVIEW",
-            "CONFIRM",
-            "MANAGE",
-            "TRANSFER",
-            "OTHER",
-          ],
-          description: "What this turn is for. Decided before anything is said.",
-        },
-        say: {
-          type: "string",
-          description: "Exactly what to speak aloud to the caller.",
-        },
-        booking: BOOKING_SCHEMA,
-        endCall: {
-          type: "boolean",
-          description: "True only after saying goodbye on a finished call.",
+export const replyFormat = (session: CallSession) => {
+  const photoSection = photos(session);
+
+  return {
+    // Narrowed, where the whole object used to be `as const`: the rest of it is
+    // now built per conversation, and only this has to stay a literal for the
+    // SDK to recognise the shape.
+    type: "json_schema" as const,
+    json_schema: {
+      name: "receptionist_reply",
+      strict: true,
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        /*
+         * The order is the point, not decoration.
+         *
+         * Structured output is generated field by field in the order declared
+         * here, so whatever comes first is what the rest is written against.
+         * With `say` first the model wrote the whole sentence and only then
+         * labelled it — and since `say` is streamed straight to the caller as it
+         * arrives, the label could not possibly have steered the words.
+         *
+         * So intent leads. It is one or two tokens, it costs nothing, and it is
+         * the routing a separate classifying call would buy — in the same
+         * request, without its second round trip.
+         *
+         * The booking state stays behind `say`, though it would read better in
+         * front of it. Moved ahead, its forty-odd tokens of JSON have to be
+         * generated before a single word can be spoken, and first token went from
+         * under a second to nearly three. On a phone that is the caller
+         * wondering whether the line has dropped.
+         */
+        required: [
+          "intent",
+          "say",
+          "booking",
+          "endCall",
+          ...(photoSection === "" ? [] : ["imageIds"]),
+        ],
+        properties: {
+          intent: {
+            type: "string",
+            enum: [
+              "FAQ",
+              "CLARIFY",
+              "ADDONS",
+              "CHECK_AVAILABILITY",
+              "ASK_SLOT",
+              "ASK_INFO",
+              "REVIEW",
+              "CONFIRM",
+              "MANAGE",
+              "TRANSFER",
+              "OTHER",
+            ],
+            description: "What this turn is for. Decided before anything is said.",
+          },
+          say: {
+            type: "string",
+            description: "Exactly what to speak aloud to the caller.",
+          },
+          booking: BOOKING_SCHEMA,
+          endCall: {
+            type: "boolean",
+            description: "True only after saying goodbye on a finished call.",
+          },
+          /*
+           * Last, for the reason `booking` sits behind `say`: nothing declared
+           * here may come between the customer and the first word of the reply.
+           * An empty array is the common answer, and it costs three tokens.
+           */
+          ...(photoSection === ""
+            ? {}
+            : {
+                imageIds: {
+                  type: "array",
+                  items: { type: "integer" },
+                  description:
+                    "Ids from the PHOTOS list whose photos answer what was just asked. Empty unless this turn is FAQ and one genuinely does.",
+                },
+              }),
         },
       },
     },
-  },
-} as const;
+  };
+};
 
 /**
  * What to do about a gap, with the one step that differs by channel.

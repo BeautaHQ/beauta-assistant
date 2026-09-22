@@ -358,6 +358,7 @@ model Organization {
   marketingTemplates         MarketingTemplate[]
   marketingCampaigns         MarketingCampaign[]
   conversations              Conversation[]
+  knowledgeImages            OrganizationKnowledgeImage[]
 
   @@map("organization")
 }
@@ -594,6 +595,27 @@ model Issue {
 // FeedbackImage: only the s3Key is stored and the viewable URL is derived from
 // the public CDN base (env) joined with the key. Uploaded via the public
 // booking flow, hence no uploader column.
+// Reference photos a salon hangs off its AI knowledge, alongside the free-text
+// `Organization.localKnowledge` — a price list, a parking sign, a style chart.
+// `note` says what the photo is: the chat model reads notes, not pixels, so the
+// note is what lets it pick the photo that answers a question and hand the URL
+// to the customer. Org-scoped rather than per-booking, and capped at
+// KNOWLEDGE_IMAGE_LIMIT rows per org by the service.
+model OrganizationKnowledgeImage {
+  id             Int      @id @default(autoincrement())
+  organizationId Int      @map("organization_id")
+  s3Key          String   @map("s3_key")
+  note           String?
+  sortOrder      Int      @default(0) @map("sort_order")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("organization_knowledge_image")
+}
+
 model IssueImage {
   id             Int      @id @default(autoincrement())
   issueId        Int      @map("issue_id")

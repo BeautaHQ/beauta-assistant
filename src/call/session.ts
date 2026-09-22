@@ -1,6 +1,7 @@
 import type { FoundBooking } from "../clients/beautaApi";
 import { emptyBooking, type BookingState } from "./booking";
 import type { Catalogue } from "../salon/catalogue";
+import type { KnowledgeImage } from "../salon/knowledge";
 import type { Salon } from "../salon/lookup";
 
 /** One line of what was actually said, kept for the salon to read back later. */
@@ -40,6 +41,14 @@ export interface CallSession {
   toNumber: string | null;
   forwardedFrom: string | null;
   catalogue: Catalogue | null;
+  /**
+   * The salon's reference photos, read once when the conversation opens.
+   *
+   * Empty on a call: a photo is no use to someone listening. Held on the
+   * session rather than fetched when one is wanted, because the ids the model
+   * hands back have to be checked against the very list it was shown.
+   */
+  knowledgeImages: KnowledgeImage[];
   booking: BookingState;
   /** The last thing check_availability returned — the only times that exist. */
   offered: { serviceId: number; date: string; slots: string[] } | null;
@@ -121,6 +130,7 @@ export const newSession = (
   toNumber: null,
   forwardedFrom: null,
   catalogue: null,
+  knowledgeImages: [],
   // Caller ID is the one thing a call knows before a word is said. A chat
   // starts with nothing and has to ask.
   booking: { ...emptyBooking(), phone: channel === "PHONE" ? phone : null },
