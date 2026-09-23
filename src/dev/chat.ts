@@ -81,7 +81,10 @@ const run = async () => {
     history.push({ role: "assistant", content: reply.say });
     record(session, "salon", reply.say);
     console.log(`SALON : ${reply.say}`);
-    console.log(`        [first token ${first}ms, total ${Date.now() - started}ms${reply.endCall ? ", END CALL" : ""}]`);
+    console.log(`        [${reply.intent}${reply.step ? "/" + reply.step : ""} · read+check ${session.intentMs}ms · first token ${first}ms · total ${Date.now() - started}ms${reply.endCall ? ", END CALL" : ""}]`);
+    for (const used of session.toolsThisTurn) {
+      console.log(`        tool ${used.name}(${JSON.stringify(used.args)})`);
+    }
   }
 
   await closeCall(session);

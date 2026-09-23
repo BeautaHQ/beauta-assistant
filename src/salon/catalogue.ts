@@ -60,6 +60,12 @@ export interface Catalogue {
   addonIdByName: Map<string, number>;
   /** The other way round, so an extra is reported in the salon's own words. */
   addonNameById: Map<number, string>;
+  /** The services alone — id, name, price, length — for the turn that settles which. */
+  servicesText: string;
+  /** Every extra once, for the turn that reads what the caller said. */
+  extrasText: string;
+  /** Price and length by service id, so the briefing can quote them without the list. */
+  serviceById: Map<number, { name: string; price: number; durationMinutes: number }>;
 }
 
 /** Lowercase, single-spaced, trimmed. Two spellings of one name become one. */
@@ -118,18 +124,22 @@ const build = async (organizationId: number): Promise<Catalogue> => {
   const byId = <T extends { id: number }>(items: T[]) =>
     [...items].sort((a, b) => a.id - b.id);
 
-  const flatText = [
+  const servicesText = [
     "SERVICES",
     ...byId(services).map(
       (service) =>
         `${service.id}. ${service.name} — ${money(service.price)}, ${service.durationMinutes} min`,
     ),
-    "",
+  ].join("\n");
+
+  const extrasText = [
     "EXTRAS",
     ...byId([...everyAddon.values()]).map(
       (addon) => `${addon.id}. ${addon.name} — ${money(addon.price)}`,
     ),
   ].join("\n");
+
+  const flatText = `${servicesText}\n\n${extrasText}`;
 
   const lines = services.map((service, index) => {
     const head = `${service.id}. ${service.name} — ${money(service.price)}, ${service.durationMinutes} min`;
@@ -145,6 +155,14 @@ const build = async (organizationId: number): Promise<Catalogue> => {
     text: lines.join("\n"),
     serviceIds: new Set(services.map((service) => service.id)),
     flatText,
+    servicesText,
+    extrasText,
+    serviceById: new Map(
+      services.map((service) => [
+        service.id,
+        { name: service.name, price: service.price, durationMinutes: service.durationMinutes },
+      ]),
+    ),
     serviceIdByName: new Map(
       services.map((service) => [nameKey(service.name), service.id]),
     ),

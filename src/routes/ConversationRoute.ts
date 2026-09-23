@@ -4,7 +4,7 @@ import { Type } from "@sinclair/typebox";
 import type { FastifyInstance } from "fastify";
 
 import { missingFields } from "../call/booking";
-import { closeCall, openCall } from "../call/callLog";
+import { closeCall, openCall, saveProgress } from "../call/callLog";
 import { newSession, record, type CallSession } from "../call/session";
 import { GREETING } from "../config";
 import { streamReply, type Turn } from "../receptionist";
@@ -38,7 +38,11 @@ const IDLE_MS = 60 * 60 * 1000;
 const sweep = () => {
   const cutoff = Date.now() - IDLE_MS;
   for (const [id, call] of calls) {
-    if (call.at < cutoff) calls.delete(id);
+    if (call.at >= cutoff) continue;
+    // Walking away is how a chat ends. Closed like a hang-up, so the row gets
+    // its end time and outcome instead of sitting open forever.
+    void closeCall(call.session).catch(() => {});
+    calls.delete(id);
   }
 };
 
@@ -179,7 +183,11 @@ export const conversationRouter = (app: FastifyInstance) => {
             say: Type.String({ description: "What Twilio would speak aloud" }),
             intent: Type.String({
               description:
-                "What the turn was for: FAQ, CLARIFY, ADDONS, CHECK_AVAILABILITY, ASK_SLOT, ASK_INFO, REVIEW, CONFIRM, MANAGE, TRANSFER, OTHER. Nothing books before REVIEW has happened.",
+                "What the caller wanted: BOOK, CONFIRM, MANAGE, FAQ, TRANSFER, OTHER, OFFLIMITS.",
+            }),
+            step: Type.Union([Type.String(), Type.Null()], {
+              description:
+                "Which step of a booking the turn was — SERVICE, ADDONS, DAY, TIME, INFO, REVIEW, BOOK — or null when it was not one. Nothing books before REVIEW has happened.",
             }),
             brokePromise: Type.Boolean({
               description:
@@ -244,6 +252,7 @@ export const conversationRouter = (app: FastifyInstance) => {
         answer = {
           say: "Sorry, I didn't catch that. Could you say it again?",
           intent: "OTHER" as const,
+          step: null,
           endCall: false,
           brokePromise: false,
         };
@@ -252,12 +261,17 @@ export const conversationRouter = (app: FastifyInstance) => {
       history.push({ role: "assistant", content: answer.say });
       record(session, "salon", answer.say, {
         intent: answer.intent,
+        step: answer.step ?? undefined,
         brokePromise: answer.brokePromise,
       });
+      // A chat has no hang-up to save on. Every turn is the last one until
+      // the next arrives, so every turn is written.
+      await saveProgress(session);
 
       return reply.send({
         say: answer.say,
         intent: answer.intent,
+        step: answer.step,
         brokePromise: answer.brokePromise,
         endCall: answer.endCall,
         booking: session.booking,

@@ -1,11 +1,16 @@
 import OpenAI from "openai";
 
-import { mergeBooking, missingFields, type BookingState } from "../call/booking";
+import { missingFields } from "../call/booking";
 import { OPENAI_API_KEY, OPENAI_MODEL } from "../config";
 import { StreamingStringField } from "./jsonStream";
 import type { CallSession } from "../call/session";
+import { readTurn, type Intent } from "./intent";
 import { briefing, REPLY_FORMAT, systemPrompt } from "./prompt";
-import { runTool, TOOLS } from "./tools";
+import { absorb, currentStep, enforce, type Step } from "./steps";
+import { runTool, toolsFor } from "./tools";
+
+export type { Intent } from "./intent";
+export type { Step } from "./steps";
 
 const client = new OpenAI({ apiKey: OPENAI_API_KEY });
 
@@ -22,62 +27,17 @@ const CHAT_CANNOT_MANAGE =
   "in your confirmation email. Is there anything else I can help you with?";
 
 /**
- * Drop extras the chosen service does not offer, and remember which.
+ * What is said to abuse, and how many times before the call ends.
  *
- * Done the moment the model fills the booking in, not later when a tool
- * refuses it. The service is still what the caller asked for, so it stays; only
- * the extras that do not belong to it go, and their names are kept so the next
- * turn can say what happened and offer what is actually available.
- *
- * The price list already shows extras nested under each service, but prose is
- * not a constraint — the same extra appears under a dozen services, and a
- * model reading quickly attaches one to a service that never listed it.
+ * Fixed in code for the same reason as the line above: a turn like this is
+ * not one the model answers. Handed "say something dirty" it might, and
+ * handed an insult it might argue. So it never sees the turn at all — the
+ * words are the same every time, and the second time on a call is goodbye.
+ * Chat has no line to put down, so it gets the same words again.
  */
-/**
- * Drop a time the diary never offered.
- *
- * The times run in ten-minute steps, and a caller saying "quarter past eleven"
- * means a minute that does not exist. Told so in the prompt, the model still
- * wrote it down and told the caller it was available; three turns later the
- * booking guard refused it, by which point they had given their name and
- * number for an appointment that was never on offer.
- *
- * Only when the times on hand are for the day being booked — otherwise there
- * is nothing to check against yet.
- */
-const pruneInvalidTime = (session: CallSession) => {
-  session.rejectedTime = null;
-  const { booking, offered } = session;
-  if (!booking.time || !offered || offered.date !== booking.date) return;
-  if (offered.slots.includes(booking.time)) return;
-
-  session.rejectedTime = booking.time;
-  booking.time = null;
-};
-
-const pruneStrayAddons = (session: CallSession) => {
-  session.rejectedAddons = [];
-
-  const { serviceId, addonIds, addonNames } = session.booking;
-  const allowed = serviceId ? session.catalogue?.addonsByService.get(serviceId) : null;
-  if (!allowed || addonIds.length === 0) return;
-
-  const ids = new Set(allowed.map((addon) => addon.id));
-  const keptIds: number[] = [];
-  const keptNames: string[] = [];
-
-  addonIds.forEach((id, index) => {
-    if (ids.has(id)) {
-      keptIds.push(id);
-      if (addonNames[index]) keptNames.push(addonNames[index]!);
-      return;
-    }
-    session.rejectedAddons.push(addonNames[index] ?? `extra ${id}`);
-  });
-
-  session.booking.addonIds = keptIds;
-  session.booking.addonNames = keptNames;
-};
+const OFF_LIMITS_STRIKES = 2;
+const OFF_LIMITS = "That's not something I can help with. Shall we carry on with your booking?";
+const OFF_LIMITS_GOODBYE = "I'm going to leave it there. Goodbye.";
 
 /*
  * The reasoning models refuse function tools on chat completions unless
@@ -91,52 +51,37 @@ export type Turn =
   | { role: "user" | "assistant"; content: string }
   | OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
-export type Intent =
-  | "FAQ"
-  | "CLARIFY"
-  | "CHECK_AVAILABILITY"
-  | "ASK_SLOT"
-  | "ASK_INFO"
-  | "REVIEW"
-  | "CONFIRM"
-  | "MANAGE"
-  | "TRANSFER"
-  | "OTHER";
-
 export interface Reply {
   /** What to speak. Already streamed out token by token by the time this returns. */
   say: string;
-  /** What the model decided this turn was for, before it wrote a word. */
+  /** What the caller wanted from this turn. */
   intent: Intent;
+  /** Which step of a booking the turn was, when it was one. */
+  step: Step | null;
   /** Whether to hang up once it has been spoken. */
   endCall: boolean;
   /**
-   * Set when the turn claimed to be reading the diary but never did.
-   *
-   * Not corrected here: by the time we know, the words have already been
-   * streamed and the caller has heard them. Retrying would have them hear the
-   * stall and then the correction. So it is reported instead — a stall that
-   * used to be invisible is now a flag on the turn.
+   * Kept for the shape the routes expect. It used to flag a turn that talked
+   * about times on a day it never looked up; the diary is now read in code
+   * before the reply is written, so a reply cannot promise a look it did not
+   * take.
    */
   brokePromise: boolean;
 }
 
 /**
- * Work out the next thing to say, running any tools the model asks for first.
+ * Work out the next thing to say, in two calls with the checks between them.
  *
- * The reply streams out as it arrives so Twilio starts speaking while the model
- * is still writing; waiting for a whole reply would add a second of silence to
- * every turn, which on a phone reads as a dropped call. JSON does not get in
- * the way of that — the spoken field is lifted out of the stream as it lands.
+ * The first reads what the caller just said and what they want. The code
+ * then takes that down — checked against the price list, and against the
+ * diary once there is enough to ask it about — and works out which step of
+ * the booking is next. The second call writes the reply for that one step,
+ * with a prompt for it and the tools for it, and nothing to look up.
  *
- * The transcript alone turned out not to be enough to keep a booking straight:
- * a model re-reading it each turn drifts, and drifting here means a real
- * appointment for the wrong service. So the session state goes in after the
- * transcript, where the model reads it last, and the tools hold it to it.
- *
- * The loop is for tool use: the model may want the diary before it can answer,
- * so it can go round a few times. Capped, because a model stuck calling tools
- * in a circle would leave the caller listening to nothing.
+ * The reply streams out as it arrives so Twilio starts speaking while the
+ * model is still writing. The loop is for the tools that remain — booking,
+ * changing, handing over — and is capped so a model stuck calling one in a
+ * circle cannot leave the caller listening to nothing.
  */
 export const streamReply = async (
   session: CallSession,
@@ -147,25 +92,71 @@ export const streamReply = async (
   session.checksThisTurn = 0;
   session.toolsThisTurn = [];
 
+  const transcript = history as OpenAI.Chat.Completions.ChatCompletionMessageParam[];
+
+  const started = Date.now();
+  const read = await readTurn(session, transcript, signal);
+  await absorb(session, read.filled);
+  session.intentMs = Date.now() - started;
+
+  const intent = enforce(read.intent, session);
+  const step =
+    intent === "BOOK" || (intent === "CONFIRM" && !session.managing)
+      ? currentStep(session, intent)
+      : null;
+  session.lastIntent = intent;
+
+  /*
+   * A chat turn about changing a booking does not get to improvise. Chat
+   * cannot prove whose booking it is, so the answer is fixed and does not come
+   * from the model at all — and since the intent is known before the reply
+   * is written, the reply is never written.
+   */
+  if (session.channel === "CHAT" && intent === "MANAGE") {
+    return { say: CHAT_CANNOT_MANAGE, intent, step, endCall: false, brokePromise: false };
+  }
+
+  if (intent === "OFFLIMITS") {
+    session.offLimits += 1;
+    const hangUp = session.channel === "PHONE" && session.offLimits >= OFF_LIMITS_STRIKES;
+    return {
+      say: hangUp ? OFF_LIMITS_GOODBYE : OFF_LIMITS,
+      intent,
+      step,
+      endCall: hangUp,
+      brokePromise: false,
+    };
+  }
+
+  /*
+   * Saying "I'm putting you through" is the decision; the tool is only how it
+   * is carried out. The model announced the transfer and called nothing, so
+   * the socket closed with "done" and Twilio hung up on a caller who had just
+   * been told to hold. The intent is enough.
+   */
+  if (session.channel === "PHONE" && intent === "TRANSFER" && session.salon.staffPhone) {
+    session.transferring = true;
+  }
+
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "system", content: systemPrompt(session) },
-    ...(history as OpenAI.Chat.Completions.ChatCompletionMessageParam[]),
+    { role: "system", content: systemPrompt(session, intent, step) },
+    ...transcript,
     { role: "system", content: briefing(session) },
   ];
+  const tools = toolsFor(intent, step, session);
 
   for (let round = 0; round < 4; round += 1) {
     const stream = await client.chat.completions.create(
       {
         model: OPENAI_MODEL,
         messages,
-        tools: TOOLS,
+        ...(tools ? { tools } : {}),
         response_format: REPLY_FORMAT,
         stream: true,
-        temperature: 0.3,
         // The newer models reject max_tokens outright; this is the name they
         // all take, 4o included.
-        max_completion_tokens: 400,
-        ...(REASONING_MODEL ? { reasoning_effort: "none" as const } : {}),
+        max_completion_tokens: 300,
+        ...(REASONING_MODEL ? { reasoning_effort: "none" as const } : { temperature: 0.3 }),
       },
       { signal },
     );
@@ -196,104 +187,35 @@ export const streamReply = async (
       try {
         const parsed = JSON.parse(raw) as {
           say?: string;
-          intent?: Intent;
-          booking?: Partial<BookingState>;
+          readBack?: boolean;
           endCall?: boolean;
         };
-        session.booking = mergeBooking(session.booking, parsed.booking);
-        pruneStrayAddons(session);
-        pruneInvalidTime(session);
-
-        const intent = parsed.intent ?? "OTHER";
-        session.lastIntent = intent;
 
         /*
          * The right to book is earned on the turn the booking is read out, and
-         * only the model knows whether it actually read it — so the turn it
-         * labels REVIEW is what grants it, and the tools check for it before
-         * anything reaches the diary.
-         *
-         * But only when there is a whole booking to read. A REVIEW declared
-         * while the phone number was still missing granted the right early,
-         * and the next message — the caller supplying that number — was taken
-         * for their yes and booked on the spot. Nothing outstanding but the
-         * yes, or it does not count.
+         * the model says which turn that was. Believed only when there was a
+         * whole booking to read: claimed while the number was still missing,
+         * the next message — the caller giving that number — was taken for
+         * their yes and booked on the spot.
          */
-        const outstanding = missingFields(session.booking);
-        if (intent === "REVIEW") {
-          // A booking being changed is already whole; the only thing the
-          // caller has to hear is which one, and what is about to happen to it.
-          if (session.managing) session.reviewed = true;
-          else if (outstanding.every((gap) => gap === "confirmation")) {
+        if (parsed.readBack === true) {
+          const outstanding = missingFields(session.booking);
+          if (session.managing || outstanding.every((gap) => gap === "confirmation")) {
             session.reviewed = true;
           }
-        }
-        /*
-         * Whether the turn talked about a day whose times it never looked up.
-         *
-         * Judged on what happened, not on the label. A turn that reads the
-         * diary and then offers what it found is doing two jobs but can only
-         * carry one name, and the model names it after what it is saying — so
-         * a diary-reading turn often comes back labelled ASK_SLOT. Keying the
-         * check to CHECK_AVAILABILITY alone let exactly the stall it exists to
-         * catch go past unnoticed.
-         */
-        const readTheDiary = session.toolsThisTurn.some(
-          (used) => used.name === "check_availability",
-        );
-        const aboutTimes = intent === "CHECK_AVAILABILITY" || intent === "ASK_SLOT";
-        const haveTimes =
-          session.offered !== null && session.offered.date === session.booking.date;
-
-        /*
-         * A chat turn about changing a booking does not get to improvise.
-         *
-         * The tools already refuse, but only once one is called — and a model
-         * that talks its way through the turn without calling anything would
-         * never meet them. Chat cannot prove whose booking it is, so the answer
-         * is fixed and does not come from the model at all.
-         *
-         * Safe to overwrite because nothing has been spoken yet: chat collects
-         * the whole reply before showing it, and this never fires on a call.
-         */
-        /*
-         * Saying "I'm putting you through" is the decision; the tool is only
-         * how it is carried out. The model announced the transfer and called
-         * nothing, so the socket closed with "done" and Twilio hung up on a
-         * caller who had just been told to hold. The intent is enough.
-         */
-        if (
-          session.channel === "PHONE" &&
-          intent === "TRANSFER" &&
-          session.salon.staffPhone
-        ) {
-          session.transferring = true;
-        }
-
-        if (session.channel === "CHAT" && intent === "MANAGE") {
-          return {
-            say: CHAT_CANNOT_MANAGE,
-            intent,
-            endCall: false,
-            brokePromise: false,
-          };
         }
 
         return {
           say: parsed.say ?? spoken.value,
           intent,
+          step,
           endCall: parsed.endCall === true,
-          brokePromise: aboutTimes && !readTheDiary && !haveTimes,
+          brokePromise: false,
         };
       } catch {
         // Cut short by max_tokens: what was streamed is what the caller heard,
         // so keep it rather than throwing away a half-spoken sentence.
-        return {
-          say: spoken.value,
-          intent: "OTHER",
-          endCall: false,
-          brokePromise: false,
-        };
+        return { say: spoken.value, intent, step, endCall: false, brokePromise: false };
       }
     }
 
@@ -325,7 +247,8 @@ export const streamReply = async (
 
   return {
     say: "Sorry, I'm having trouble with that. Can I take a message for the salon?",
-    intent: "OTHER",
+    intent,
+    step,
     endCall: false,
     brokePromise: false,
   };

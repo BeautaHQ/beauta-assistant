@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 
-import { closeCall, openCall } from "../call/callLog";
+import { closeCall, openCall, saveProgress } from "../call/callLog";
 import { getCatalogue } from "../salon/catalogue";
 import { salonForCall } from "../salon/lookup";
 import { streamReply, type Turn } from "../receptionist";
@@ -86,13 +86,17 @@ export const conversationRelayRouter = (app: FastifyInstance) => {
         history.push({ role: "assistant", content: reply.say });
         record(session, "salon", reply.say, {
           intent: reply.intent,
+          step: reply.step ?? undefined,
           brokePromise: reply.brokePromise,
         });
+        // Written now rather than at hang-up, so a dropped call still reads.
+        void saveProgress(session);
         request.log.info(
           {
             event: "replied",
             callSid,
             intent: reply.intent,
+            step: reply.step,
             brokePromise: reply.brokePromise,
             reply: reply.say,
           },

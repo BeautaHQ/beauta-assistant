@@ -12,6 +12,8 @@ import {
 import { mergeBooking, missingFields } from "../call/booking";
 import { offerable } from "../salon/slots";
 import type { CallSession } from "../call/session";
+import type { Intent } from "./intent";
+import type { Step } from "./steps";
 
 /**
  * What the receptionist can actually do, as opposed to talk about.
@@ -43,33 +45,17 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "create_booking",
       description:
-        "Make the booking. Only after the caller has heard the whole thing read back — service, day, time — and said yes. The time must be one check_availability returned.",
+        "Make the booking in the briefing. Only after the caller has heard the whole thing read back and said yes.",
       parameters: {
         type: "object",
         properties: {
-          serviceId: { type: "number" },
-          date: { type: "string", description: "YYYY-MM-DD" },
-          time: { type: "string", description: "HH:mm, 24-hour" },
-          firstName: { type: "string" },
-          lastName: { type: "string" },
-          phone: { type: "string", description: "The number to ring them back on" },
-          email: { type: "string", description: "Optional. Omit unless they gave one." },
-          addonIds: { type: "array", items: { type: "number" } },
           callerConfirmed: {
             type: "boolean",
             description:
               "True only if the caller has just said yes to the booking read back to them.",
           },
         },
-        required: [
-          "serviceId",
-          "date",
-          "time",
-          "firstName",
-          "lastName",
-          "phone",
-          "callerConfirmed",
-        ],
+        required: ["callerConfirmed"],
       },
     },
   },
@@ -225,6 +211,50 @@ const refuse = (error: string, note: string, extra: Args = {}) =>
  * a receptionist that says it cannot reach the diary and offers to take a
  * message is far better than one that goes silent mid-sentence.
  */
+/**
+ * Which tools this one turn is allowed, by what the turn is for.
+ *
+ * The prompt already says "only book on CONFIRM"; this is what makes it so.
+ * A turn labelled REVIEW is handed no create_booking at all, so the model
+ * cannot book a caller who has only said their name, however sure it feels.
+ * The diary is reachable from every turn that talks about times, and from a
+ * move, which needs it for the new time. Everything else gets nothing.
+ */
+const TOOLS_BY_NAME = new Map(
+  TOOLS.flatMap((tool) => (tool.type === "function" ? [[tool.function.name, tool] as const] : [])),
+);
+
+const pick = (...names: string[]) =>
+  names.map((name) => {
+    const tool = TOOLS_BY_NAME.get(name);
+    if (!tool) throw new Error(`no such tool: ${name}`);
+    return tool;
+  });
+
+export const toolsFor = (
+  intent: Intent,
+  step: Step | null,
+  session: CallSession,
+): OpenAI.Chat.Completions.ChatCompletionTool[] | undefined => {
+  // The diary is read in code before the reply is written, so no step of a
+  // booking needs a tool to look at it. The one tool left is the one that
+  // books — and the waitlist, for a day the diary came back empty for.
+  if (step === "BOOK") return pick("create_booking");
+  if (step === "TIME" && session.offered?.slots.length === 0) return pick("join_waitlist");
+
+  switch (intent) {
+    case "CONFIRM":
+      // Only ever reached while changing a booking; a new one has step BOOK.
+      return session.managing ? pick("reschedule_booking", "cancel_booking") : undefined;
+    case "MANAGE":
+      return pick("find_booking", "check_availability", "reschedule_booking", "cancel_booking");
+    case "TRANSFER":
+      return pick("transfer_to_staff");
+    default:
+      return undefined;
+  }
+};
+
 export const runTool = async (
   name: string,
   args: Args,
@@ -359,30 +389,17 @@ const dispatch = async (
           );
         }
 
-        const wanted = mergeBooking(session.booking, {
-          serviceId: args.serviceId,
-          date: args.date,
-          time: args.time,
-          firstName: args.firstName,
-          lastName: args.lastName,
-          phone: args.phone,
-          email: args.email,
-          addonIds: args.addonIds ?? [],
-          confirmed: args.callerConfirmed === true,
-        });
-
-        const strayOnBooking = strayAddons(session, wanted.serviceId!, wanted.addonIds);
-        if (strayOnBooking.length > 0) {
-          return refuse(
-            "addon_not_for_service",
-            `Extras ${strayOnBooking.join(", ")} are not listed under that service. Drop them or pick ones that are.`,
-          );
-        }
+        /*
+         * From the state, not the arguments. What the caller asked for was
+         * taken down and checked before this turn began; the one thing the
+         * model knows that the state does not is whether they just said yes.
+         * Asked to repeat the service id, it repeated one the briefing never
+         * showed it — zero — and overwrote a real one.
+         */
+        const wanted = { ...session.booking, confirmed: args.callerConfirmed === true };
 
         const gaps = missingFields(wanted);
         if (gaps.length > 0) {
-          // Keep what the arguments did establish; only the gap is the problem.
-          session.booking = wanted;
           return refuse(
             "not_ready",
             `Ask the caller for the ${gaps[0]} first, then book. Do not book yet.`,

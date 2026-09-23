@@ -10,6 +10,8 @@ export interface TranscriptLine {
   at: string;
   /** What the receptionist decided the turn was for. Absent on caller lines. */
   intent?: string;
+  /** Which step of a booking the turn was, when it was one. */
+  step?: string;
   /** True when the turn said it would read the diary and then did not. */
   brokePromise?: boolean;
 }
@@ -41,16 +43,19 @@ export interface CallSession {
   forwardedFrom: string | null;
   catalogue: Catalogue | null;
   booking: BookingState;
-  /** The last thing check_availability returned — the only times that exist. */
-  offered: { serviceId: number; date: string; slots: string[] } | null;
+  /**
+   * The last thing the diary returned — the only times that exist.
+   *
+   * `key` names the appointment they were fetched for: service, day, extras,
+   * head count. Any of those changing makes the list stale, and the code that
+   * reads the diary compares the key rather than guessing which field moved.
+   */
+  offered: { serviceId: number; date: string; slots: string[]; key?: string } | null;
   /**
    * Whether the whole booking has been read back to the caller: the service,
    * its extras, the day, the time and their name.
    *
-   * Set only by a turn the model itself labelled REVIEW, which is the turn on
-   * which it gets read out. Inferred before from the state having nothing
-   * outstanding but a yes, which was close but not the same thing — a turn can
-   * have everything on file without a word of it reaching the caller.
+   * Set by the turn that read it out, which the model reports on its reply.
    * Enforced rather than asked for: told in words to read it back first, the
    * model booked a caller who had done no more than say their name.
    */
@@ -75,8 +80,7 @@ export interface CallSession {
   /**
    * What the last turn was for.
    *
-   * The briefing is built before the model answers, so it is always a turn
-   * behind — and without this it cannot tell a caller who is halfway through
+   * Without this the next turn cannot tell a caller who is halfway through
    * changing a booking from one who has said nothing yet. It offered the
    * new-booking checklist to someone asking to move an appointment, which sent
    * the model looking for a service instead of for their booking.
@@ -104,6 +108,10 @@ export interface CallSession {
    * the diary was read to produce it is invisible.
    */
   toolsThisTurn: { name: string; args: unknown; result: string }[];
+  /** How long the turn spent reading and checking before the reply began. For the simulator. */
+  intentMs: number;
+  /** How many turns this call has been abusive or obscene. Two on a call ends it. */
+  offLimits: number;
   transcript: TranscriptLine[];
 }
 
@@ -135,6 +143,8 @@ export const newSession = (
   waitlisted: false,
   checksThisTurn: 0,
   toolsThisTurn: [],
+  intentMs: 0,
+  offLimits: 0,
   transcript: [],
 });
 
