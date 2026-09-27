@@ -89,6 +89,23 @@ const TTL_MS = 5 * 60 * 1000;
 
 const money = (value: number) => `$${value}`;
 
+/**
+ * The salon's own description of a service, trimmed for reading out.
+ *
+ * Owners write these for the booking page, so they carry things a caller
+ * never hears — "(The image is for display only.)" — and line breaks. One
+ * line, capped, so a long menu does not swell the prompt.
+ */
+const BLURB_MAX = 160;
+const blurb = (description: string | null | undefined): string => {
+  const text = (description ?? "")
+    .replace(/\(?\s*the image is for display only\.?\s*\)?/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+  return text.length > BLURB_MAX ? `${text.slice(0, BLURB_MAX - 1).trimEnd()}…` : text;
+};
+
 const build = async (organizationId: number): Promise<Catalogue> => {
   const services = await listServices(organizationId);
 
@@ -139,7 +156,22 @@ const build = async (organizationId: number): Promise<Catalogue> => {
     ),
   ].join("\n");
 
-  const flatText = `${servicesText}\n\n${extrasText}`;
+  /*
+   * For a question: the same list with each service's description, so "what
+   * is dipping powder?" is answered with what the salon wrote and not with
+   * its price. The SERVICE step keeps the short form — there the caller is
+   * choosing, not asking.
+   */
+  const describedServicesText = [
+    "SERVICES",
+    ...byId(services).map((service) => {
+      const head = `${service.id}. ${service.name} — ${money(service.price)}, ${service.durationMinutes} min`;
+      const about = blurb(service.description);
+      return about ? `${head}. ${about}` : head;
+    }),
+  ].join("\n");
+
+  const flatText = `${describedServicesText}\n\n${extrasText}`;
 
   const lines = services.map((service, index) => {
     const head = `${service.id}. ${service.name} — ${money(service.price)}, ${service.durationMinutes} min`;

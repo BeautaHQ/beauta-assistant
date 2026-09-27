@@ -4,7 +4,7 @@ import { missingFields } from "../call/booking";
 import { OPENAI_API_KEY, OPENAI_MODEL } from "../config";
 import { StreamingStringField } from "./jsonStream";
 import type { CallSession } from "../call/session";
-import { readTurn, type Intent } from "./intent";
+import { readTurn, type FaqTopic, type Intent } from "./intent";
 import { briefing, REPLY_FORMAT, systemPrompt } from "./prompt";
 import { absorb, currentStep, enforce, type Step } from "./steps";
 import { runTool, toolsFor } from "./tools";
@@ -35,6 +35,14 @@ const CHAT_CANNOT_MANAGE =
  * words are the same every time, and the second time on a call is goodbye.
  * Chat has no line to put down, so it gets the same words again.
  */
+/**
+ * What is said to a request outside the job — a taxi, the weather, another
+ * shop. Fixed in code so the model cannot invent a way to help; it says what
+ * it does do and hands the turn back.
+ */
+const unsupported = (salonName: string) =>
+  `Sorry, that's not something I can help with. I can book an appointment at ${salonName}, or answer questions about our services, prices, hours and how to find us. What would you like?`;
+
 const OFF_LIMITS_STRIKES = 2;
 const OFF_LIMITS = "That's not something I can help with. Shall we carry on with your booking?";
 const OFF_LIMITS_GOODBYE = "I'm going to leave it there. Goodbye.";
@@ -58,6 +66,8 @@ export interface Reply {
   intent: Intent;
   /** Which step of a booking the turn was, when it was one. */
   step: Step | null;
+  /** What a question was about, when the turn was one. */
+  topic: FaqTopic | null;
   /** Whether to hang up once it has been spoken. */
   endCall: boolean;
   /**
@@ -96,7 +106,7 @@ export const streamReply = async (
 
   const started = Date.now();
   const read = await readTurn(session, transcript, signal);
-  await absorb(session, read.filled);
+  await absorb(session, read.filled, read.intent);
   session.intentMs = Date.now() - started;
 
   const intent = enforce(read.intent, session);
@@ -104,6 +114,7 @@ export const streamReply = async (
     intent === "BOOK" || (intent === "CONFIRM" && !session.managing)
       ? currentStep(session, intent)
       : null;
+  const topic = intent === "FAQ" ? read.topic : null;
   session.lastIntent = intent;
 
   /*
@@ -113,7 +124,18 @@ export const streamReply = async (
    * is written, the reply is never written.
    */
   if (session.channel === "CHAT" && intent === "MANAGE") {
-    return { say: CHAT_CANNOT_MANAGE, intent, step, endCall: false, brokePromise: false };
+    return { say: CHAT_CANNOT_MANAGE, intent, step, topic, endCall: false, brokePromise: false };
+  }
+
+  if (intent === "UNSUPPORTED") {
+    return {
+      say: unsupported(session.salon.name),
+      intent,
+      step,
+      topic,
+      endCall: false,
+      brokePromise: false,
+    };
   }
 
   if (intent === "OFFLIMITS") {
@@ -123,6 +145,7 @@ export const streamReply = async (
       say: hangUp ? OFF_LIMITS_GOODBYE : OFF_LIMITS,
       intent,
       step,
+      topic,
       endCall: hangUp,
       brokePromise: false,
     };
@@ -139,11 +162,11 @@ export const streamReply = async (
   }
 
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "system", content: systemPrompt(session, intent, step) },
+    { role: "system", content: systemPrompt(session, intent, step, topic) },
     ...transcript,
-    { role: "system", content: briefing(session) },
+    { role: "system", content: briefing(session, intent) },
   ];
-  const tools = toolsFor(intent, step, session);
+  const tools = toolsFor(intent, step, session, topic);
 
   for (let round = 0; round < 4; round += 1) {
     const stream = await client.chat.completions.create(
@@ -209,13 +232,14 @@ export const streamReply = async (
           say: parsed.say ?? spoken.value,
           intent,
           step,
+          topic,
           endCall: parsed.endCall === true,
           brokePromise: false,
         };
       } catch {
         // Cut short by max_tokens: what was streamed is what the caller heard,
         // so keep it rather than throwing away a half-spoken sentence.
-        return { say: spoken.value, intent, step, endCall: false, brokePromise: false };
+        return { say: spoken.value, intent, step, topic, endCall: false, brokePromise: false };
       }
     }
 
@@ -242,13 +266,14 @@ export const streamReply = async (
     }
 
     // A tool may have changed what is known — re-brief before the next round.
-    messages.push({ role: "system", content: briefing(session) });
+    messages.push({ role: "system", content: briefing(session, intent) });
   }
 
   return {
     say: "Sorry, I'm having trouble with that. Can I take a message for the salon?",
     intent,
     step,
+    topic,
     endCall: false,
     brokePromise: false,
   };

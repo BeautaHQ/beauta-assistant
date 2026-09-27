@@ -25,6 +25,12 @@ export type Intent =
   | "TRANSFER"
   | "OTHER"
   /**
+   * A request the receptionist does not do at all — not a booking, not a
+   * question about the salon or its services. Answered with a fixed line in
+   * code, so the model never improvises a service that does not exist.
+   */
+  | "UNSUPPORTED"
+  /**
    * Abuse aimed at the receptionist or the salon, obscenity, or being asked
    * to say something crude. Not a turn the model gets to answer: the reply is
    * fixed in code, so there is nothing to be talked into.
@@ -38,6 +44,7 @@ export const INTENTS: Intent[] = [
   "FAQ",
   "TRANSFER",
   "OTHER",
+  "UNSUPPORTED",
   "OFFLIMITS",
 ];
 
@@ -72,8 +79,22 @@ export interface Filled {
   email: string | null;
 }
 
+/**
+ * What a question is about, so it gets the one thing that answers it.
+ *
+ * One FAQ prompt carrying the price list, the diary and the salon's details at
+ * once had the model answering a price question with opening hours and a
+ * "is today free?" with the whole extras list. Each topic now gets its own
+ * short prompt and only its own material.
+ */
+export type FaqTopic = "PRICE" | "AVAILABILITY" | "SALON" | "HOWTO" | "GIFTCARD";
+
+export const FAQ_TOPICS: FaqTopic[] = ["PRICE", "AVAILABILITY", "SALON", "HOWTO", "GIFTCARD"];
+
 export interface TurnReading {
   intent: Intent;
+  /** Only when the intent is FAQ. */
+  topic: FaqTopic | null;
   filled: Filled;
 }
 
@@ -90,7 +111,7 @@ const TURN_FORMAT = {
     schema: {
       type: "object",
       additionalProperties: false,
-      required: ["filled", "intent"],
+      required: ["filled", "intent", "topic"],
       properties: {
         filled: {
           type: "object",
@@ -126,6 +147,7 @@ const TURN_FORMAT = {
           },
         },
         intent: { type: "string", enum: INTENTS },
+        topic: { type: ["string", "null"], enum: [...FAQ_TOPICS, null] },
       },
     },
   },
@@ -175,15 +197,16 @@ ${session.catalogue?.servicesText ?? "SERVICES\n(none loaded)"}
 
 ${session.catalogue?.extrasText ?? "EXTRAS\n(none loaded)"}
 
-filled: only what their LAST message states. Service and extras by the exact name and id above; a service that could be two is null. Once a service is known, a name that is on EXTRAS is an extra. changeService is true only if they say they want to change, switch or swap the chosen service, or say "instead" — naming a service is not a change, and a name on both lists is an extra. Day as YYYY-MM-DD, time as HH:mm 24-hour, number as they gave it. Null or [] when not said.
+filled: only what their LAST message states — whether they are booking or only asking; a question about a service on a day fills the service and the day. Service and extras by the exact name and id above; a service that could be two is null. Once a service is known, a name that is on EXTRAS is an extra. changeService is true only if they say they want to change, switch or swap the chosen service, or say "instead" — naming a service is not a change, and a name on both lists is an extra. Day as YYYY-MM-DD, time as HH:mm 24-hour, number as they gave it. quantity is how many people, only from words about people ("just me", "two of us", "3 người"); a number beside giờ, pm, am or o'clock is a time, not a count. Null or [] when not said.
 
 intent:
-BOOK      an appointment, at any step of one.
+BOOK      they want an appointment made, at any step of one.
 CONFIRM   a plain yes to the read-back. A name is not a yes. A time is not a yes.
 MANAGE    move or cancel a booking they already have.
-FAQ       a question the lists answer.
+FAQ       a question, not a request to book. Then topic: PRICE (price, duration, what is offered), AVAILABILITY (whether a day or time is free for an appointment), SALON (whether or when the salon is open, address, parking, policies, anything about the salon itself), HOWTO (how or where to book), GIFTCARD (buying, giving or using a gift card or voucher, or the balance on one). topic is null for every other intent.
 TRANSFER  a person, a complaint, money.
 OTHER     hello, thanks, goodbye, small talk, a joke. Swearing out of frustration is still OTHER or BOOK.
+UNSUPPORTED  a request or question that is none of the above — nothing to do with booking, the salon or what it offers (the weather, a taxi, a recipe, another business).
 OFFLIMITS insults at you or the salon, sexual or obscene content, asking you to say something rude or crude, or asking for other customers' or the salon's private information.`;
 };
 
@@ -235,13 +258,22 @@ export const readTurn = async (
     const parsed = JSON.parse(completion.choices[0]?.message?.content ?? "{}") as {
       filled?: Partial<Filled>;
       intent?: Intent;
+      topic?: FaqTopic | null;
     };
+    const intent = parsed.intent && INTENTS.includes(parsed.intent) ? parsed.intent : "OTHER";
     return {
-      intent: parsed.intent && INTENTS.includes(parsed.intent) ? parsed.intent : "OTHER",
+      intent,
+      // A question with no topic the model could name is treated as a price
+      // question: the price list is the one thing every salon question can
+      // fall back on without inventing anything.
+      topic:
+        intent === "FAQ"
+          ? parsed.topic && FAQ_TOPICS.includes(parsed.topic) ? parsed.topic : "PRICE"
+          : null,
       filled: { ...EMPTY, ...parsed.filled },
     };
   } catch {
     // A reply that is not JSON is a reply that said nothing usable.
-    return { intent: "OTHER", filled: EMPTY };
+    return { intent: "OTHER", topic: null, filled: EMPTY };
   }
 };

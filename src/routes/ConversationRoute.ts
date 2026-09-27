@@ -253,6 +253,7 @@ export const conversationRouter = (app: FastifyInstance) => {
           say: "Sorry, I didn't catch that. Could you say it again?",
           intent: "OTHER" as const,
           step: null,
+          topic: null,
           endCall: false,
           brokePromise: false,
         };

@@ -252,4 +252,66 @@ export const bookingChangeTools: Tool[] = [
       ...(item.notifyCustomer && !booking.hasEmail ? { note: "the customer has no email, so no cancellation email can be sent" } : {}),
     });
   }),
+
+  tool("propose_reassign_staff", "Propose a different staff member for a scheduled booking, same day and time. The whole booking — service and addons — moves to them. For a booking for several customers, ask the owner which customer's staff to change.", {
+    bookingId: int, staffId: int,
+  }, async (args, context) => {
+    const item = args as { bookingId: number; staffId: number };
+    const found = await existingBooking(context, item.bookingId);
+    if (!found.booking) return refuse(found.problem!);
+    const booking = found.booking;
+    const staff = (await context.data.staff()).find((row) => row.id === item.staffId);
+    if (!staff) return refuse(`no staff member with id ${item.staffId}; call list_staff`);
+
+    /*
+     * The four checks a person would make, in the order they would make them:
+     * can they do it, is it already theirs, does every part of the booking
+     * belong to them, and is nothing else proposed for this booking. All
+     * before the diary is asked anything.
+     */
+    const problems: string[] = [];
+    // A booking under way is not handed to someone else from a chat window. Checked first, because
+    // the diary has no past slots and would otherwise call this "not working" — a wrong reason.
+    if (booking.startTime <= new Date()) problems.push(`this booking started at ${inSalonTime(booking.startTime, context.input.timezone)}, so it cannot be given to someone else now`);
+    if (!staff.isActive) problems.push(`${staff.name} is not active`);
+    if (booking.people > 1) problems.push("this booking is for several customers, each with their own staff member; ask the owner which customer's staff to change");
+    if (booking.staff.length === 1 && booking.staff[0]!.id === staff.id) problems.push(`${staff.name} already does this booking`);
+    for (const task of booking.tasks) {
+      const can = task.serviceId ? staff.serviceIds.includes(task.serviceId) : task.addonId ? staff.addonIds.includes(task.addonId) : true;
+      if (!can) problems.push(`${staff.name} does not do ${task.name}, so they cannot take this booking`);
+    }
+    if (!booking.serviceId) problems.push("this booking has no service");
+    const alreadyChanged = [
+      ...context.batch.pending("RESCHEDULE_BOOKING"),
+      ...context.batch.pending("CANCEL_BOOKING"),
+      ...context.batch.pending("REASSIGN_STAFF"),
+    ].some((row) => row.bookingId === booking.id);
+    if (alreadyChanged) problems.push("this booking already has a change proposed");
+    if (problems.length) return refuse(...problems);
+
+    /*
+     * Free then? Two looks, because neither alone is enough. Their own bookings
+     * that day, against this one's whole span — the engine's start times only
+     * account for the service, not the addons on top of it. Then the engine,
+     * for their working hours and blocks, which the bookings list knows nothing
+     * about.
+     */
+    const timezone = context.input.timezone;
+    const when = inSalonTime(booking.startTime, timezone);
+    // "Thursday 2026-09-25 13:00": the weekday is for the owner, the rest is for the diary.
+    const [, date = "", start = ""] = /(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})$/.exec(when) ?? [];
+    const clash = (await context.data.bookingsOn(date, timezone)).find((row) =>
+      row.id !== booking.id && row.status === "SCHEDULED" && row.staff.some((member) => member.id === staff.id)
+      && row.startTime < booking.endTime && row.endTime > booking.startTime);
+    if (clash) {
+      return refuse(`${staff.name} has ${clash.customer} from ${inSalonTime(clash.startTime, timezone).slice(-5)} to ${inSalonTime(clash.endTime, timezone).slice(-5)} then`);
+    }
+    const slots = await staffAvailableTimes(context.input.organizationId, { serviceId: booking.serviceId!, staffId: staff.id, date });
+    if (!slots.includes(start)) return refuse(`${staff.name} is not working, or is blocked, at ${start} on ${weekdayOf(date)} ${date}`);
+
+    return accept(context, {
+      type: "REASSIGN_STAFF", bookingId: booking.id, customer: booking.customer, phone: booking.phone, services: booking.services, when,
+      fromStaff: booking.staff.map((member) => member.name), staffId: staff.id, staffName: staff.name, taskIds: booking.tasks.map((task) => task.id),
+    }, { to: staff.name });
+  }),
 ];

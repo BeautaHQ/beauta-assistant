@@ -133,7 +133,7 @@ export const createSalonData = (organizationId: number) => {
         select: {
           id: true, startTime: true, endTime: true, status: true, firstName: true, lastName: true, phone: true, email: true,
           quantity: true, finalPrice: true, amountPaid: true,
-          bookingTasks: { where: { deletedAt: null }, select: { serviceId: true, addonId: true, staffId: true, service: { select: { name: true } }, addon: { select: { name: true } }, staff: { select: { name: true } } } },
+          bookingTasks: { where: { deletedAt: null }, select: { id: true, serviceId: true, addonId: true, staffId: true, service: { select: { name: true } }, addon: { select: { name: true } }, staff: { select: { name: true } } } },
         },
       });
       if (!row) return null;
@@ -147,6 +147,11 @@ export const createSalonData = (organizationId: number) => {
         services: [...new Set(row.bookingTasks.map((task) => task.service?.name).filter((name): name is string => Boolean(name)))],
         addons: [...new Set(row.bookingTasks.map((task) => task.addon?.name).filter((name): name is string => Boolean(name)))],
         staff: [...new Map(row.bookingTasks.map((task) => [task.staffId, task.staff.name])).entries()].map(([id, name]) => ({ id, name })),
+        // One per part of the appointment, each with its own staff member: what a reassignment moves.
+        tasks: row.bookingTasks.map((task) => ({
+          id: task.id, serviceId: task.serviceId, addonId: task.addonId, staffId: task.staffId,
+          name: task.service?.name ?? task.addon?.name ?? "part of the booking",
+        })),
         refundOnCancel: payment?.paymentStatus === "SUCCEEDED" && payment.stripePaymentIntentId ? row.amountPaid ?? row.finalPrice : null,
       };
     }),

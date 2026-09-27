@@ -10,9 +10,10 @@ import {
   rescheduleBooking,
 } from "../clients/beautaApi";
 import { mergeBooking, missingFields } from "../call/booking";
+import { prisma } from "../clients/prisma";
 import { offerable } from "../salon/slots";
 import type { CallSession } from "../call/session";
-import type { Intent } from "./intent";
+import type { FaqTopic, Intent } from "./intent";
 import type { Step } from "./steps";
 
 /**
@@ -66,6 +67,21 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       description:
         "Put the caller through to someone at the salon. Use when they ask for a person, or when something is beyond you — a complaint, a question about their bill, anything the price list and the diary cannot answer. Say you are putting them through before calling it. Phone calls only.",
       parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_gift_card",
+      description:
+        "Look a gift card up by its code and say what is left on it. Call as soon as the caller gives a code; never guess a balance.",
+      parameters: {
+        type: "object",
+        properties: {
+          code: { type: "string", description: "The code as the caller gave it" },
+        },
+        required: ["code"],
+      },
     },
   },
   {
@@ -235,12 +251,16 @@ export const toolsFor = (
   intent: Intent,
   step: Step | null,
   session: CallSession,
+  topic: FaqTopic | null = null,
 ): OpenAI.Chat.Completions.ChatCompletionTool[] | undefined => {
   // The diary is read in code before the reply is written, so no step of a
   // booking needs a tool to look at it. The one tool left is the one that
   // books — and the waitlist, for a day the diary came back empty for.
   if (step === "BOOK") return pick("create_booking");
   if (step === "TIME" && session.offered?.slots.length === 0) return pick("join_waitlist");
+
+  // A question about a gift card may come with a code; the balance is read, not guessed.
+  if (intent === "FAQ" && topic === "GIFTCARD") return pick("check_gift_card");
 
   switch (intent) {
     case "CONFIRM":
@@ -547,6 +567,49 @@ const dispatch = async (
         // The socket does the handing over; this only says it should.
         session.transferring = true;
         return JSON.stringify({ ok: true, transferring: true });
+      }
+
+      case "check_gift_card": {
+        /*
+         * Read straight from the database, as every read here is. The code is
+         * the card's own secret — whoever holds it can spend it at checkout —
+         * so telling its holder the balance gives away nothing they do not
+         * already have. Compared without case or spaces: a code read out on
+         * the phone arrives as "a b c 1 2 3".
+         */
+        const code = String(args.code ?? "").replace(/[\s-]/g, "").toUpperCase();
+        if (!code) return JSON.stringify({ found: false, reason: "no code given" });
+
+        const card = await prisma.purchasedGiftCard.findFirst({
+          where: {
+            organizationId: session.salon.organizationId,
+            code: { equals: code, mode: "insensitive" },
+          },
+          select: { balance: true, initialAmount: true, expiresAt: true, status: true },
+        });
+        if (!card) return JSON.stringify({ found: false, reason: "no card with that code at this salon" });
+
+        /*
+         * The same three checks beauta-api makes before a card is spent:
+         * status, date, balance. Spelled out as one sentence, because handed a
+         * bare date the model read a card good until 2027 as "expired on".
+         */
+        const expired = card.expiresAt.getTime() < Date.now() || card.status === "EXPIRED";
+        const date = card.expiresAt.toISOString().slice(0, 10);
+        const state = expired
+          ? `expired on ${date}, cannot be used`
+          : card.status === "REDEEMED" || card.balance <= 0
+            ? "fully used up, nothing left on it"
+            : card.status !== "ACTIVE"
+              ? `${card.status.toLowerCase()}, cannot be used`
+              : `active, valid until ${date}`;
+        return JSON.stringify({
+          found: true,
+          balance: card.balance,
+          originalValue: card.initialAmount,
+          state,
+          usable: state.startsWith("active"),
+        });
       }
 
       case "find_booking": {

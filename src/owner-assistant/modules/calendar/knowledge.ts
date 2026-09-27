@@ -3,8 +3,9 @@
  * always come from the scheduling engine.
  */
 export const calendarKnowledge = `CALENDAR
-- A booking is a customer, a service (plus any addons) done by a staff member at a start time.
-- Whether a time is free depends on opening hours, special days, staff hours and blocks, existing bookings, and the service and addon durations. Never work it out yourself: always ask find_available_times or check_time_available.
+- A booking is a customer, a service (plus any addons) done by a staff member at a start time. Each part — the service, each addon — is a task with its own staff member, usually the same one. A booking for several people has one staff member per person, all at the same time.
+- Status: SCHEDULED is upcoming and the only one that can be moved, cancelled or given to someone else. COMPLETED, CANCELED and NO_SHOW are history; nothing changes them.
+- Whether a time is free depends on opening hours, special days, staff hours and blocks, existing bookings, and the service and addon durations — addons make the appointment longer. Never work it out yourself: always ask find_available_times or check_time_available.
 - Free times are start times, every 10 minutes. Today starts 30 minutes from now; past dates have none.
 - Free times depend on the service's length. If the owner does not name a service, even when asking when a staff member is free, ask which service; never try services one by one.
 - Use any staff unless they name one. "people" is how many customers come together, each needing their own staff at the same time.
@@ -17,4 +18,5 @@ export const calendarKnowledge = `CALENDAR
 - If the time is taken the tool says so and gives the nearest free times: offer those instead.
 - Changing a booking: find it first, by the customer's phone (get_customer_history lists their upcoming bookings) or by day (list_bookings). If several could be meant, list them and ask which.
 - Reschedule: keep the same staff member unless the owner says any staff or names another. It needs the new date and start time; ask if missing.
+- Change who does a booking, same time: propose_reassign_staff with the booking and the staff member (list_staff for the id). "Move all of Linh's bookings today to Mai": list_bookings for Linh, then one proposal per booking.
 - Cancel: email the customer by default unless the owner says not to. Put the owner's reason in if they gave one; do not ask for one. A no-show is only for a booking whose time has passed. If the customer paid online, cancelling refunds them: say so.`;

@@ -24,10 +24,29 @@ export type Step = "SERVICE" | "ADDONS" | "DAY" | "TIME" | "INFO" | "REVIEW" | "
  */
 const resolveService = (catalogue: Catalogue | null, filled: Filled): number | null => {
   if (!catalogue) return null;
-  const byName = filled.serviceName
-    ? catalogue.serviceIdByName.get(nameKey(filled.serviceName))
-    : undefined;
-  if (byName !== undefined) return byName;
+  const said = filled.serviceName ? nameKey(filled.serviceName) : "";
+
+  const exact = said ? catalogue.serviceIdByName.get(said) : undefined;
+  if (exact !== undefined) return exact;
+
+  /*
+   * The words they used, in any order, inside exactly one service's name.
+   * "dipping powder natural" is not a row in the price list, but every word
+   * of it sits in DIPPING POWDER ON NATURAL NAILS and in no other service —
+   * and the model, asked for the id beside the name, hands it back only
+   * sometimes. Two services that both fit is an ambiguity, and stays null.
+   */
+  const words = said.split(" ").filter((word) => word.length > 1);
+  if (words.length > 0) {
+    const fits = [...catalogue.serviceIdByName.entries()].filter(([name]) =>
+      words.every((word) => name.includes(word)),
+    );
+    if (fits.length === 1) return fits[0]![1];
+    // "dipping powder" fits two. That is the answer — ask which — and the id
+    // the model put beside it is a coin toss, not a tie-break.
+    if (fits.length > 1) return null;
+  }
+
   return filled.serviceId && catalogue.serviceIds.has(filled.serviceId) ? filled.serviceId : null;
 };
 
@@ -104,9 +123,13 @@ const offerKey = (booking: BookingState) =>
  * checked against them — and dropped if it is not one of them, with the list
  * kept so the reply can offer the nearest.
  */
-const readDiary = async (session: CallSession) => {
+const readDiary = async (session: CallSession, assumeOnePerson = false) => {
   const booking = session.booking;
-  if (!booking.serviceId || booking.quantity === null || !booking.date) return;
+  if (!booking.serviceId || !booking.date) return;
+  // A booking waits for the head count, because it changes the answer. A
+  // question does not: "is there anything today?" is answered for one person
+  // and the count is asked for only if they go on to book.
+  if (booking.quantity === null && !assumeOnePerson) return;
 
   const key = offerKey(booking);
   if (session.offered?.key !== key) {
@@ -116,7 +139,7 @@ const readDiary = async (session: CallSession) => {
         serviceId: booking.serviceId,
         date: booking.date,
         addonIds: booking.addonIds,
-        quantity: booking.quantity,
+        quantity: booking.quantity ?? 1,
       });
       session.offered = {
         serviceId: booking.serviceId,
@@ -145,7 +168,11 @@ const readDiary = async (session: CallSession) => {
  * not filling in a form, and a day they mention is the day their booking is
  * on, not a day to book.
  */
-export const absorb = async (session: CallSession, filled: Filled): Promise<void> => {
+export const absorb = async (
+  session: CallSession,
+  filled: Filled,
+  intent: Intent,
+): Promise<void> => {
   if (session.bookingPublicId || session.managing || session.lastIntent === "MANAGE") return;
 
   const catalogue = session.catalogue;
@@ -197,7 +224,9 @@ export const absorb = async (session: CallSession, filled: Filled): Promise<void
   session.booking = mergeBooking(session.booking, said);
   pruneStrayAddons(session);
   session.rejectedAddons.push(...addons.unknown);
-  await readDiary(session);
+  // A question about a day is answered now, for one person, rather than
+  // after the extras and head count a booking would collect first.
+  await readDiary(session, intent === "FAQ");
 };
 
 /**

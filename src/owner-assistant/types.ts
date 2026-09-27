@@ -119,10 +119,19 @@ export type CancelBookingAction = {
   noShow: boolean; notifyCustomer: boolean; reason: string | null; refund: number | null; currency: string;
 };
 
+/**
+ * Give a booking to a different staff member, same day and time. Every part
+ * of it — the service and each addon — moves to them, task by task.
+ */
+export type ReassignStaffAction = {
+  type: "REASSIGN_STAFF"; bookingId: number; customer: string; phone: string; services: string[]; when: string;
+  fromStaff: string[]; staffId: number; staffName: string; taskIds: number[];
+};
+
 export type OwnerAction =
   | CreateServiceAction | UpdateServiceAction | CreateAddonAction | UpdateAddonAction
   | CreateStaffAction | UpdateStaffAction | CreateStaffBlockAction | SetCommissionAction | RemoveCommissionAction
-  | CreateBookingAction | RescheduleBookingAction | CancelBookingAction;
+  | CreateBookingAction | RescheduleBookingAction | CancelBookingAction | ReassignStaffAction;
 
 export type OwnerAssistantResult = {
   /** The main message, plain text in the owner's language. */

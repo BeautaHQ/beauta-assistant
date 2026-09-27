@@ -16,7 +16,7 @@ import { missingFields } from "../call/booking";
 import type { CallSession } from "../call/session";
 import { salonDates } from "../salon/clock";
 import { describeOffer } from "../salon/slots";
-import type { Intent } from "./intent";
+import type { FaqTopic, Intent } from "./intent";
 import type { Step } from "./steps";
 
 /**
@@ -82,15 +82,64 @@ They are changing a booking they have. The briefing says what is found and what 
   TRANSFER: `THIS TURN
 Say you are putting them through, then call transfer_to_staff.`,
 
+  // Replaced by FAQ_TURN[topic] whenever the question's topic is known.
   FAQ: `THIS TURN
-Answer from the price list in one or two sentences. If it leads to a booking, offer it.`,
+Answer the question in one or two sentences from what you have. Then offer to book in one short question, and stop.`,
 
   OTHER: `THIS TURN
 Hello, thanks, goodbye, small talk, a joke. One line, warm, then back to the step the briefing is on. On goodbye, say it back and set endCall true.`,
 
+  // Never reaches the model: the reply is fixed in code (see index.ts).
+  UNSUPPORTED: "",
+
   // Never reaches the model: the reply to an off-limits turn is fixed in code.
   OFFLIMITS: `THIS TURN
 Keep it about the salon.`,
+};
+
+/**
+ * One question, one prompt, one source. A price question sees the price list
+ * and nothing else; a "is today free?" sees the diary line and nothing else; a
+ * question about the salon sees what the salon wrote about itself. Handed all
+ * three at once the model answered each with a bit of the others.
+ */
+const FAQ_TURN: Record<FaqTopic, string> = {
+  PRICE: `THIS TURN
+Answer the price, duration or what-is-offered question in one or two sentences from the price list; a name that fits two services gets both. Asked what a service is, explain it from its description on the list or from SALON INFO; if neither says, say the salon has not described it — never make it up. Then offer to book in one short question, and stop — no extras, no head count until they say yes.`,
+
+  AVAILABILITY: `THIS TURN
+The briefing's diary line is the answer: say what is free that day, naming the service it is for, or that the time they asked for is not and what is near it. If the service is not settled, ask which service first and nothing else. Then offer to book in one short question, and stop — no extras, no head count until they say yes.`,
+
+  SALON: `THIS TURN
+Answer only from SALON INFO. If what they ask is not there, say the salon has not given you that and offer to take a message or put them through. Never guess an address, an hour or a policy.`,
+
+  HOWTO: `THIS TURN
+Three ways to book, in one breath: on the website (the booking page in SALON INFO, if there is one), with you right now, or by ringing the salon (the phone in SALON INFO, if there is one). Then ask if they would like to book now, and stop.`,
+
+  GIFTCARD: `THIS TURN
+Answer only what they asked, from GIFT CARDS: which cards there are and what they cost, or that none are on file. You cannot sell one — a card is bought on the gift card page in SALON INFO, and its code is used at checkout on the website or in the salon. An address is said exactly as written in SALON INFO, never shortened or merged with another.
+If they give a card code, call check_gift_card and say the balance and the card's state as the tool words it — active until when, expired, or used up — then stop; no offer to book. Not found: say so and ask them to check the code. A balance question with no code: ask for the code.`,
+};
+
+/**
+ * What the salon has said about itself, for questions about the salon.
+ *
+ * Only what the owner actually wrote. Lines the salon left blank are not in
+ * here at all, so the model cannot read a blank as "no" — it sees that the
+ * question has no answer on file and says so.
+ */
+const salonInfo = (session: CallSession): string => {
+  const { salon } = session;
+  const lines = [`name: ${salon.name}`, `timezone: ${salon.timezone}`];
+  if (salon.phone) lines.push(`phone: ${salon.phone}`);
+  if (salon.addressNote) lines.push(`address: ${salon.addressNote}`);
+  if (salon.website) lines.push(`website: ${salon.website}`);
+  if (salon.bookingUrl) lines.push(`booking page: ${salon.bookingUrl}`);
+  if (salon.hours) lines.push(`opening hours: ${salon.hours}`);
+  if (salon.giftCardUrl) lines.push(`gift card page: ${salon.giftCardUrl}`);
+  if (salon.localKnowledge) lines.push(`about the salon: ${salon.localKnowledge}`);
+  if (salon.aiRules) lines.push(`the salon asks you to: ${salon.aiRules}`);
+  return `SALON INFO\n${lines.join("\n")}`;
 };
 
 /**
@@ -102,17 +151,37 @@ Keep it about the salon.`,
  * where it is read: the services alone to settle which, the whole list to
  * answer a question.
  */
-export const systemPrompt = (session: CallSession, intent: Intent, step: Step | null) => {
+export const systemPrompt = (
+  session: CallSession,
+  intent: Intent,
+  step: Step | null,
+  topic: FaqTopic | null,
+) => {
   const { today, todayName, tomorrow, tomorrowName } = salonDates(session.salon.timezone);
 
-  const list =
-    step === "SERVICE"
-      ? `\n${session.catalogue?.servicesText ?? ""}\n`
-      : intent === "FAQ"
-        ? `\nPRICE LIST\n${session.catalogue?.flatText ?? ""}\n`
-        : "";
+  const catalogue = session.catalogue;
+  let list = "";
+  if (step === "SERVICE") list = `\n${catalogue?.servicesText ?? ""}\n`;
+  else if (intent === "FAQ") {
+    /*
+     * Every question sees what the salon wrote about itself, whatever the
+     * topic. A price question used to see the price list alone, so "how long
+     * does a lash lift last?" was answered with its duration on the menu and
+     * not the "3–4 weeks" the owner had written, and a five-year-old was
+     * offered kids' polish the owner sells from age six.
+     */
+    if (topic === "PRICE") list = `\nPRICE LIST\n${catalogue?.flatText ?? ""}\n`;
+    // A question about a day needs the services only to settle which one it is about.
+    else if (topic === "AVAILABILITY" && !session.booking.serviceId) list = `\n${catalogue?.servicesText ?? ""}\n`;
+    else if (topic === "GIFTCARD") list = `\nGIFT CARDS\n${session.salon.giftCards ?? "(none on file)"}\n`;
+    list += `\n${salonInfo(session)}\n`;
+  }
 
-  const turn = step ? STEP[step] : TURN[intent as Exclude<Intent, "BOOK">];
+  const turn = step
+    ? STEP[step]
+    : intent === "FAQ" && topic
+      ? FAQ_TURN[topic]
+      : TURN[intent as Exclude<Intent, "BOOK">];
 
   return `You are the receptionist for ${session.salon.name}, a nail and beauty salon.
 
@@ -190,7 +259,10 @@ const step = (gap: string, session: CallSession): string => {
  */
 const diaryLine = (session: CallSession): string => {
   const { booking, offered } = session;
-  if (!booking.serviceId || booking.quantity === null || !booking.date) {
+  // Times on hand for this day, fetched for a question before the head count
+  // was known, are still the answer to that question.
+  const onHand = offered !== null && offered.date === booking.date && offered.serviceId === booking.serviceId;
+  if (!onHand && (!booking.serviceId || booking.quantity === null || !booking.date)) {
     return "diary: not asked yet — the service and extras come first";
   }
   if (!offered) return "diary: could not be reached — say so and offer to take a message";
@@ -207,7 +279,7 @@ const diaryLine = (session: CallSession): string => {
  * Current, not a turn behind: what the caller just said has already been
  * taken down and checked by the time this is built.
  */
-export const briefing = (session: CallSession): string => {
+export const briefing = (session: CallSession, intent: Intent = "BOOK"): string => {
   const { booking } = session;
 
   if (session.managing) {
@@ -275,6 +347,16 @@ Booked already, reference ${session.bookingPublicId}. Done — never book again.
 
   const gaps = missingFields(booking);
   lines.push("");
+  /*
+   * A question is not a booking turn. Told what was "still missing", the
+   * model answered "what is dipping powder?" and then asked about extras and
+   * head count, as the list said to. On a question the list stays out; the
+   * topic's own instructions say what to do after the answer.
+   */
+  if (intent === "FAQ" || intent === "OTHER") {
+    lines.push("They are asking, not booking. Answer, then at most one short offer to book. Do not collect any of the details above.");
+    return lines.join("\n");
+  }
   if (gaps.length === 0) {
     lines.push("Nothing is missing. Call create_booking now.");
   } else if (session.reviewed && gaps.length === 1 && gaps[0] === "confirmation") {

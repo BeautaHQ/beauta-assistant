@@ -63,6 +63,8 @@ export interface Service {
   name: string;
   price: number;
   durationMinutes: number;
+  /** What the salon wrote about it, for a caller asking what it is. */
+  description: string | null;
 }
 
 export interface Addon {

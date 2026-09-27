@@ -21,10 +21,10 @@ export const MODULES: Module[] = [
   },
   {
     name: "calendar",
-    summary: "free times for a service, checking a time, the bookings on a day, and booking, rescheduling or cancelling a customer's appointment",
+    summary: "free times for a service, checking a time, the bookings on a day, and booking, rescheduling, cancelling or changing the staff member of a customer's appointment",
     knowledge: calendarKnowledge,
     tools: [...calendarTools, ...bookingTools, ...bookingChangeTools],
-    runOrder: ["CANCEL_BOOKING", "RESCHEDULE_BOOKING", "CREATE_BOOKING"],
+    runOrder: ["CANCEL_BOOKING", "RESCHEDULE_BOOKING", "REASSIGN_STAFF", "CREATE_BOOKING"],
   },
   {
     name: "customers",

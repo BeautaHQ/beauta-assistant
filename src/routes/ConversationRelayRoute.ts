@@ -35,6 +35,15 @@ export const conversationRelayRouter = (app: FastifyInstance) => {
       timezone: "Australia/Sydney",
       found: false,
       staffPhone: null,
+      phone: null,
+      addressNote: null,
+      website: null,
+      bookingUrl: null,
+      hours: null,
+      giftCards: null,
+      giftCardUrl: null,
+      localKnowledge: null,
+      aiRules: null,
     });
     /*
      * Ours, minted the moment the socket opens. Twilio's call id arrives a beat
