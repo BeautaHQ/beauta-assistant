@@ -18,6 +18,7 @@ import { conversationRelayRouter } from "./routes/ConversationRelayRoute";
 import { conversationRouter } from "./routes/ConversationRoute";
 import { enquiryRouter } from "./routes/EnquiryRoute";
 import { handoffRouter } from "./routes/HandoffRoute";
+import { ownerAssistantRouter } from "./routes/OwnerAssistantRoute";
 
 /**
  * Beauta's phone line.
@@ -101,6 +102,10 @@ export const buildServer = () => {
    */
   app.register(async (instance) => enquiryRouter(instance), {
     prefix: "/api/v1/enquiries",
+  });
+
+  app.register(async (instance) => ownerAssistantRouter(instance), {
+    prefix: "/api/v1/owner-assistant",
   });
 
   return app;

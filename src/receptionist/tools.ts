@@ -10,8 +10,11 @@ import {
   rescheduleBooking,
 } from "../clients/beautaApi";
 import { mergeBooking, missingFields } from "../call/booking";
+import { prisma } from "../clients/prisma";
 import { offerable } from "../salon/slots";
 import type { CallSession } from "../call/session";
+import type { FaqTopic, Intent } from "./intent";
+import type { Step } from "./steps";
 
 /**
  * What the receptionist can actually do, as opposed to talk about.
@@ -43,33 +46,17 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "create_booking",
       description:
-        "Make the booking. Only after the caller has heard the whole thing read back — service, day, time — and said yes. The time must be one check_availability returned.",
+        "Make the booking in the briefing. Only after the caller has heard the whole thing read back and said yes.",
       parameters: {
         type: "object",
         properties: {
-          serviceId: { type: "number" },
-          date: { type: "string", description: "YYYY-MM-DD" },
-          time: { type: "string", description: "HH:mm, 24-hour" },
-          firstName: { type: "string" },
-          lastName: { type: "string" },
-          phone: { type: "string", description: "The number to ring them back on" },
-          email: { type: "string", description: "Optional. Omit unless they gave one." },
-          addonIds: { type: "array", items: { type: "number" } },
           callerConfirmed: {
             type: "boolean",
             description:
               "True only if the caller has just said yes to the booking read back to them.",
           },
         },
-        required: [
-          "serviceId",
-          "date",
-          "time",
-          "firstName",
-          "lastName",
-          "phone",
-          "callerConfirmed",
-        ],
+        required: ["callerConfirmed"],
       },
     },
   },
@@ -80,6 +67,21 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       description:
         "Put the caller through to someone at the salon. Use when they ask for a person, or when something is beyond you — a complaint, a question about their bill, anything the price list and the diary cannot answer. Say you are putting them through before calling it. Phone calls only.",
       parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_gift_card",
+      description:
+        "Look a gift card up by its code and say what is left on it. Call as soon as the caller gives a code; never guess a balance.",
+      parameters: {
+        type: "object",
+        properties: {
+          code: { type: "string", description: "The code as the caller gave it" },
+        },
+        required: ["code"],
+      },
     },
   },
   {
@@ -225,6 +227,54 @@ const refuse = (error: string, note: string, extra: Args = {}) =>
  * a receptionist that says it cannot reach the diary and offers to take a
  * message is far better than one that goes silent mid-sentence.
  */
+/**
+ * Which tools this one turn is allowed, by what the turn is for.
+ *
+ * The prompt already says "only book on CONFIRM"; this is what makes it so.
+ * A turn labelled REVIEW is handed no create_booking at all, so the model
+ * cannot book a caller who has only said their name, however sure it feels.
+ * The diary is reachable from every turn that talks about times, and from a
+ * move, which needs it for the new time. Everything else gets nothing.
+ */
+const TOOLS_BY_NAME = new Map(
+  TOOLS.flatMap((tool) => (tool.type === "function" ? [[tool.function.name, tool] as const] : [])),
+);
+
+const pick = (...names: string[]) =>
+  names.map((name) => {
+    const tool = TOOLS_BY_NAME.get(name);
+    if (!tool) throw new Error(`no such tool: ${name}`);
+    return tool;
+  });
+
+export const toolsFor = (
+  intent: Intent,
+  step: Step | null,
+  session: CallSession,
+  topic: FaqTopic | null = null,
+): OpenAI.Chat.Completions.ChatCompletionTool[] | undefined => {
+  // The diary is read in code before the reply is written, so no step of a
+  // booking needs a tool to look at it. The one tool left is the one that
+  // books — and the waitlist, for a day the diary came back empty for.
+  if (step === "BOOK") return pick("create_booking");
+  if (step === "TIME" && session.offered?.slots.length === 0) return pick("join_waitlist");
+
+  // A question about a gift card may come with a code; the balance is read, not guessed.
+  if (intent === "FAQ" && topic === "GIFTCARD") return pick("check_gift_card");
+
+  switch (intent) {
+    case "CONFIRM":
+      // Only ever reached while changing a booking; a new one has step BOOK.
+      return session.managing ? pick("reschedule_booking", "cancel_booking") : undefined;
+    case "MANAGE":
+      return pick("find_booking", "check_availability", "reschedule_booking", "cancel_booking");
+    case "TRANSFER":
+      return pick("transfer_to_staff");
+    default:
+      return undefined;
+  }
+};
+
 export const runTool = async (
   name: string,
   args: Args,
@@ -359,30 +409,17 @@ const dispatch = async (
           );
         }
 
-        const wanted = mergeBooking(session.booking, {
-          serviceId: args.serviceId,
-          date: args.date,
-          time: args.time,
-          firstName: args.firstName,
-          lastName: args.lastName,
-          phone: args.phone,
-          email: args.email,
-          addonIds: args.addonIds ?? [],
-          confirmed: args.callerConfirmed === true,
-        });
-
-        const strayOnBooking = strayAddons(session, wanted.serviceId!, wanted.addonIds);
-        if (strayOnBooking.length > 0) {
-          return refuse(
-            "addon_not_for_service",
-            `Extras ${strayOnBooking.join(", ")} are not listed under that service. Drop them or pick ones that are.`,
-          );
-        }
+        /*
+         * From the state, not the arguments. What the caller asked for was
+         * taken down and checked before this turn began; the one thing the
+         * model knows that the state does not is whether they just said yes.
+         * Asked to repeat the service id, it repeated one the briefing never
+         * showed it — zero — and overwrote a real one.
+         */
+        const wanted = { ...session.booking, confirmed: args.callerConfirmed === true };
 
         const gaps = missingFields(wanted);
         if (gaps.length > 0) {
-          // Keep what the arguments did establish; only the gap is the problem.
-          session.booking = wanted;
           return refuse(
             "not_ready",
             `Ask the caller for the ${gaps[0]} first, then book. Do not book yet.`,
@@ -530,6 +567,49 @@ const dispatch = async (
         // The socket does the handing over; this only says it should.
         session.transferring = true;
         return JSON.stringify({ ok: true, transferring: true });
+      }
+
+      case "check_gift_card": {
+        /*
+         * Read straight from the database, as every read here is. The code is
+         * the card's own secret — whoever holds it can spend it at checkout —
+         * so telling its holder the balance gives away nothing they do not
+         * already have. Compared without case or spaces: a code read out on
+         * the phone arrives as "a b c 1 2 3".
+         */
+        const code = String(args.code ?? "").replace(/[\s-]/g, "").toUpperCase();
+        if (!code) return JSON.stringify({ found: false, reason: "no code given" });
+
+        const card = await prisma.purchasedGiftCard.findFirst({
+          where: {
+            organizationId: session.salon.organizationId,
+            code: { equals: code, mode: "insensitive" },
+          },
+          select: { balance: true, initialAmount: true, expiresAt: true, status: true },
+        });
+        if (!card) return JSON.stringify({ found: false, reason: "no card with that code at this salon" });
+
+        /*
+         * The same three checks beauta-api makes before a card is spent:
+         * status, date, balance. Spelled out as one sentence, because handed a
+         * bare date the model read a card good until 2027 as "expired on".
+         */
+        const expired = card.expiresAt.getTime() < Date.now() || card.status === "EXPIRED";
+        const date = card.expiresAt.toISOString().slice(0, 10);
+        const state = expired
+          ? `expired on ${date}, cannot be used`
+          : card.status === "REDEEMED" || card.balance <= 0
+            ? "fully used up, nothing left on it"
+            : card.status !== "ACTIVE"
+              ? `${card.status.toLowerCase()}, cannot be used`
+              : `active, valid until ${date}`;
+        return JSON.stringify({
+          found: true,
+          balance: card.balance,
+          originalValue: card.initialAmount,
+          state,
+          usable: state.startsWith("active"),
+        });
       }
 
       case "find_booking": {

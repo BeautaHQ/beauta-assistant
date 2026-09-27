@@ -54,6 +54,13 @@ export const relayUrl = () => `${PUBLIC_URL.replace(/^http/, "ws")}/stream`;
 export const handoffUrl = () => `${PUBLIC_URL}/handoff`;
 
 /** Where beauta-api lives. Bookings go through it, never straight to the database. */
+/**
+ * Where customers book for themselves, so the receptionist can point a caller
+ * who asks "how do I book?" at the salon's own page. Optional: without it the
+ * answer is "on our website" and nothing more specific.
+ */
+export const BOOKING_SITE_URL = (process.env.BOOKING_SITE_URL ?? "").replace(/\/$/, "");
+
 export const BEAUTA_API_URL = (
   process.env.BEAUTA_API_URL ?? "http://localhost:3001"
 ).replace(/\/$/, "");

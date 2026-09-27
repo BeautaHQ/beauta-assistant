@@ -2,105 +2,211 @@
  * Every word the model is told, in one place.
  *
  * Two pieces, sent at opposite ends of the conversation. The system prompt is
- * fixed for the call: who the salon is, what it sells, how to speak. The
- * briefing is rebuilt each turn and goes in last, after the transcript, because
- * the last thing a model reads carries the most weight — and what it keeps
- * getting wrong is running ahead of what the caller has actually said.
+ * built for the turn: who the salon is, how to speak, the roadmap, and what
+ * this one turn is for — nothing about the other kinds of turn it is not. The
+ * briefing is rebuilt each turn and goes in last, after the transcript,
+ * because the last thing a model reads carries the most weight.
  *
- * It lives apart from both the call state and the streaming loop. Kept inside
- * the state, prose crept into a module whose job was to hold facts; kept inside
- * the loop, the wording of a question sat in the middle of stream handling.
+ * The model no longer writes the booking; it only reads it. What the caller
+ * said is taken down and checked in code before this prompt is built (see
+ * steps.ts), so the briefing is current, not a turn behind, and the reply has
+ * nothing to look up and nothing to record — only the next question to ask.
  */
-import { BOOKING_SCHEMA, missingFields } from "../call/booking";
+import { missingFields } from "../call/booking";
 import type { CallSession } from "../call/session";
 import { salonDates } from "../salon/clock";
 import { describeOffer } from "../salon/slots";
+import type { FaqTopic, Intent } from "./intent";
+import type { Step } from "./steps";
 
 /**
  * How to write a time, which is the one thing the two channels cannot share.
  *
  * On the phone the words are read aloud, and a speech engine makes a mess of
  * "13:40". In writing the opposite holds: digits are read at a glance and are
- * unambiguous, where spelled-out times hide mistakes. A customer who typed
- * "1.40pm" was answered "two o'clock is available" and had to argue — in
- * digits the misreading would have been obvious on sight.
+ * unambiguous, where spelled-out times hide mistakes.
  */
 const timeStyle = (channel: CallSession["channel"]) =>
   channel === "CHAT"
     ? `THE CHANNEL
-This is a chat window. They are reading you, not hearing you, and they can scroll back.
-Write every clock time as digits with am or pm — 1:40 PM, 9:00 AM, 3:30 PM — never spelled out in words. When they give you a time, put it back to them in digits before you act on it, so a misreading is caught while it still costs nothing.
-Dates are the exception: write those the way a person would, "Tuesday 22 September", never "2026-09-22". The YYYY-MM-DD form is for the tools, not for anyone reading.`
+Chat. They read you and can scroll back. Clock times as digits with am/pm — 1:40 PM, never words. Dates the way a person says them, "Tuesday 22 September".`
     : `THE CHANNEL
-This is a phone call. Every word you write is spoken aloud, and the caller cannot scroll back.
-Say times the way people say them — "two o'clock", "quarter past three", "ten past two" — never "13:40", which a speech engine reads badly.`;
+A phone call, spoken aloud, no scrolling back. Times the way people say them — "two o'clock", "quarter past three" — never "13:40".`;
+
+/**
+ * The steps, in order, for the channel.
+ *
+ * A phone call already knows the number — it is the caller ID — so there is no
+ * step for it. Listed anyway, the model asked for it.
+ */
+const roadmap = (channel: CallSession["channel"]) =>
+  channel === "CHAT"
+    ? "1 service · 2 extras and how many people · 3 day · 4 time · 5 name · 6 number · 7 read it all back · 8 book, only after their yes."
+    : "1 service · 2 extras and how many people · 3 day · 4 time · 5 name · 6 read it all back · 7 book, only after their yes.";
+
+/**
+ * What one step of a booking asks for. One block per step, nothing about the
+ * others. Written as the move to make, not as a rule to obey.
+ */
+const STEP: Record<Step, string> = {
+  SERVICE: `THIS TURN
+Settle the service. If what they said could be two on the list, offer the two. If they named none, ask what they would like.`,
+
+  ADDONS: `THIS TURN
+Name two or three of this service's extras (in the briefing) with prices, and ask how many people it is for. One question.`,
+
+  DAY: `THIS TURN
+Ask which day suits them.`,
+
+  TIME: `THIS TURN
+Every free time for the day is in the briefing. Read it and tell them what the day looks like — where it is open, where it is taken — then ask what time suits. If the time they asked for was not free, say so and say what is near it. A run of free times may be said as a range; a gap must not be. Day full: offer the waitlist or another day.`,
+
+  INFO: `THIS TURN
+Ask for the first thing STILL MISSING in the briefing, and only that.`,
+
+  REVIEW: `THIS TURN
+Read the booking back exactly as the briefing has it — service, extras, people, day, time, name; nothing from the conversation that is not there — and ask them to confirm. "I have you down for", never "booked". Set readBack true.`,
+
+  BOOK: `THIS TURN
+They said yes. Call create_booking now. Then say it is done and say goodbye.`,
+};
+
+/** What a turn that is not a booking step does. */
+const TURN: Record<Exclude<Intent, "BOOK">, string> = {
+  CONFIRM: `THIS TURN
+They said yes. Call the tool. Then say it is done.`,
+
+  MANAGE: `THIS TURN
+They are changing a booking they have. The briefing says what is found and what to do next. Only the day and time change; for a new time, check_availability first.`,
+
+  TRANSFER: `THIS TURN
+Say you are putting them through, then call transfer_to_staff.`,
+
+  // Replaced by FAQ_TURN[topic] whenever the question's topic is known.
+  FAQ: `THIS TURN
+Answer the question in one or two sentences from what you have. Then offer to book in one short question, and stop.`,
+
+  OTHER: `THIS TURN
+Hello, thanks, goodbye, small talk, a joke. One line, warm, then back to the step the briefing is on. On goodbye, say it back and set endCall true.`,
+
+  // Never reaches the model: the reply is fixed in code (see index.ts).
+  UNSUPPORTED: "",
+
+  // Never reaches the model: the reply to an off-limits turn is fixed in code.
+  OFFLIMITS: `THIS TURN
+Keep it about the salon.`,
+};
+
+/**
+ * One question, one prompt, one source. A price question sees the price list
+ * and nothing else; a "is today free?" sees the diary line and nothing else; a
+ * question about the salon sees what the salon wrote about itself. Handed all
+ * three at once the model answered each with a bit of the others.
+ */
+const FAQ_TURN: Record<FaqTopic, string> = {
+  PRICE: `THIS TURN
+Answer the price, duration or what-is-offered question in one or two sentences from the price list; a name that fits two services gets both. Asked what a service is, explain it from its description on the list or from SALON INFO; if neither says, say the salon has not described it — never make it up. Then offer to book in one short question, and stop — no extras, no head count until they say yes.`,
+
+  AVAILABILITY: `THIS TURN
+The briefing's diary line is the answer: say what is free that day, naming the service it is for, or that the time they asked for is not and what is near it. If the service is not settled, ask which service first and nothing else. Then offer to book in one short question, and stop — no extras, no head count until they say yes.`,
+
+  SALON: `THIS TURN
+Answer only from SALON INFO. If what they ask is not there, say the salon has not given you that and offer to take a message or put them through. Never guess an address, an hour or a policy.`,
+
+  HOWTO: `THIS TURN
+Three ways to book, in one breath: on the website (the booking page in SALON INFO, if there is one), with you right now, or by ringing the salon (the phone in SALON INFO, if there is one). Then ask if they would like to book now, and stop.`,
+
+  GIFTCARD: `THIS TURN
+Answer only what they asked, from GIFT CARDS: which cards there are and what they cost, or that none are on file. You cannot sell one — a card is bought on the gift card page in SALON INFO, and its code is used at checkout on the website or in the salon. An address is said exactly as written in SALON INFO, never shortened or merged with another.
+If they give a card code, call check_gift_card and say the balance and the card's state as the tool words it — active until when, expired, or used up — then stop; no offer to book. Not found: say so and ask them to check the code. A balance question with no code: ask for the code.`,
+};
+
+/**
+ * What the salon has said about itself, for questions about the salon.
+ *
+ * Only what the owner actually wrote. Lines the salon left blank are not in
+ * here at all, so the model cannot read a blank as "no" — it sees that the
+ * question has no answer on file and says so.
+ */
+const salonInfo = (session: CallSession): string => {
+  const { salon } = session;
+  const lines = [`name: ${salon.name}`, `timezone: ${salon.timezone}`];
+  if (salon.phone) lines.push(`phone: ${salon.phone}`);
+  if (salon.addressNote) lines.push(`address: ${salon.addressNote}`);
+  if (salon.website) lines.push(`website: ${salon.website}`);
+  if (salon.bookingUrl) lines.push(`booking page: ${salon.bookingUrl}`);
+  if (salon.hours) lines.push(`opening hours: ${salon.hours}`);
+  if (salon.giftCardUrl) lines.push(`gift card page: ${salon.giftCardUrl}`);
+  if (salon.localKnowledge) lines.push(`about the salon: ${salon.localKnowledge}`);
+  if (salon.aiRules) lines.push(`the salon asks you to: ${salon.aiRules}`);
+  return `SALON INFO\n${lines.join("\n")}`;
+};
 
 /**
  * Short on purpose. A phone caller cannot skim, so anything said has to be
- * short enough to hold in the ear — paragraphs that read fine on screen are
- * unbearable read aloud.
+ * short enough to hold in the ear.
  *
- * The price list is pasted in whole rather than looked up. It costs about a
- * thousand tokens on a prompt that caches, and it buys back a tool round of
- * silence at the start of every call plus the ids the model used to guess at.
+ * The roadmap is stated once and the briefing says where on it the call is;
+ * the model works out the question from the two. The price list goes in only
+ * where it is read: the services alone to settle which, the whole list to
+ * answer a question.
  */
-export const systemPrompt = (session: CallSession) => {
+export const systemPrompt = (
+  session: CallSession,
+  intent: Intent,
+  step: Step | null,
+  topic: FaqTopic | null,
+) => {
   const { today, todayName, tomorrow, tomorrowName } = salonDates(session.salon.timezone);
-  const catalogue = session.catalogue?.text ?? "";
+
+  const catalogue = session.catalogue;
+  let list = "";
+  if (step === "SERVICE") list = `\n${catalogue?.servicesText ?? ""}\n`;
+  else if (intent === "FAQ") {
+    /*
+     * Every question sees what the salon wrote about itself, whatever the
+     * topic. A price question used to see the price list alone, so "how long
+     * does a lash lift last?" was answered with its duration on the menu and
+     * not the "3–4 weeks" the owner had written, and a five-year-old was
+     * offered kids' polish the owner sells from age six.
+     */
+    if (topic === "PRICE") list = `\nPRICE LIST\n${catalogue?.flatText ?? ""}\n`;
+    // A question about a day needs the services only to settle which one it is about.
+    else if (topic === "AVAILABILITY" && !session.booking.serviceId) list = `\n${catalogue?.servicesText ?? ""}\n`;
+    else if (topic === "GIFTCARD") list = `\nGIFT CARDS\n${session.salon.giftCards ?? "(none on file)"}\n`;
+    list += `\n${salonInfo(session)}\n`;
+  }
+
+  const turn = step
+    ? STEP[step]
+    : intent === "FAQ" && topic
+      ? FAQ_TURN[topic]
+      : TURN[intent as Exclude<Intent, "BOOK">];
 
   return `You are the receptionist for ${session.salon.name}, a nail and beauty salon.
 
 TODAY
-${todayName} ${today}. Tomorrow is ${tomorrowName} ${tomorrow}. The salon runs on ${session.salon.timezone}.
-Relative days count from today, never from a date mentioned earlier in the conversation.
+${todayName} ${today}. Tomorrow is ${tomorrowName} ${tomorrow}. Timezone ${session.salon.timezone}. Relative days count from today.
 
 ${timeStyle(session.channel)}
 
 HOW TO SPEAK
-One or two short sentences, then stop and let them reply.
-Everything you state comes from the price list or a tool. Never invent a price, a time, or a staff name.
-Never say you are about to do something. Do it, then say what you found.
-Never read a booking reference out.
+One or two short sentences, then stop. Only facts from the briefing, the price list or a tool. Do things, never announce them. Never read a reference out. Never ask for anything the briefing already has.
+If the briefing says DROPPED or NOT FREE, say that first.
 
-PRICE LIST
-These ids are the only real ones. Extras are listed under the service they belong to and go with no other.
+THE ROADMAP — in this order; the briefing says where you are.
+${roadmap(session.channel)}
+${list}
+${turn}
 
-${catalogue}
-
-THE STEPS
-1 service · 2 extras and how many people · 3 the day · 4 the time · 5 their name · 6 their number · 7 read it back, and label that turn REVIEW · 8 book it.
-Nothing books until a turn labelled REVIEW has happened, whatever else you have.
-Extras and the number of people come before the diary: both change how long the appointment takes and how many staff it needs.
-One step per turn — but if their answer finishes a step, take it and do the next in the same breath. Never ask twice for something you have been told.
-
-INTENT — decide it before you write a word.
-CLARIFY   more than one service could be meant — two removals, two manicures, natural or extensions — so ask, even when one seems likelier. Only when a single service can possibly be meant do you take it yourself and say which one and what it costs.
-ADDONS    offer the extras under that service and ask how many people. One turn, and take no for an answer.
-CHECK_AVAILABILITY  they named or changed a day or a time. Call check_availability this turn. A time they name is a time to check, not a time to accept.
-ASK_SLOT  you already have that day's times and are telling them about them. They come in ten-minute steps, so never describe them as a range: "nine to half past six" promises times that do not exist, and quarter past eleven is not one of them.
-ASK_INFO  asking for their name, then their number.
-REVIEW    reading the whole booking back — service, extras, people, day, time, name — and asking them to confirm. This never books.
-CONFIRM   they have just said yes to what you read back. Only now call create_booking. A name is not a yes; a choice of time is not a yes.
-MANAGE    moving or cancelling a booking they already have. Phone only: ask their number and which day it is on, then call find_booking. A move changes only the day and time.
-TRANSFER  they want a person, or it is beyond you — a complaint, money, anything the price list and the diary cannot answer. Say you are putting them through, then call transfer_to_staff.
-FAQ       a question you can answer from the price list.
-OTHER     hello, thanks, goodbye, anything else.
-
-WHEN IT GOES WRONG
-A tool fails: say you cannot reach the diary, and offer to take a message.
-The day is full: say so and offer the waitlist or another day. Never pretend a time exists.
-They ask for a person: put them through. Do not talk them out of it.
-
-YOUR ANSWER
-"say" is the words themselves — no labels, no markdown, no stage directions.
-"booking" carries everything known so far; leave a field null only while it is genuinely unknown.
-"endCall" is true only after you have said goodbye, and never in the same breath as a question.`;
+ANSWER
+say: the words only. readBack: true only if you read the whole booking back this turn. endCall: true only after goodbye.`;
 };
 
 /**
- * The model answers in this shape rather than free text, so the reply is
- * already structured when it arrives instead of being guessed at afterwards.
- * `strict` makes the schema a guarantee, not a request.
+ * The model answers in this shape rather than free text. `strict` makes the
+ * schema a guarantee, not a request. `say` leads because it is streamed to
+ * the caller as it arrives.
  */
 export const REPLY_FORMAT = {
   type: "json_schema",
@@ -110,49 +216,13 @@ export const REPLY_FORMAT = {
     schema: {
       type: "object",
       additionalProperties: false,
-      /*
-       * The order is the point, not decoration.
-       *
-       * Structured output is generated field by field in the order declared
-       * here, so whatever comes first is what the rest is written against.
-       * With `say` first the model wrote the whole sentence and only then
-       * labelled it — and since `say` is streamed straight to the caller as it
-       * arrives, the label could not possibly have steered the words.
-       *
-       * So intent leads. It is one or two tokens, it costs nothing, and it is
-       * the routing a separate classifying call would buy — in the same
-       * request, without its second round trip.
-       *
-       * The booking state stays behind `say`, though it would read better in
-       * front of it. Moved ahead, its forty-odd tokens of JSON have to be
-       * generated before a single word can be spoken, and first token went from
-       * under a second to nearly three. On a phone that is the caller
-       * wondering whether the line has dropped.
-       */
-      required: ["intent", "say", "booking", "endCall"],
+      required: ["say", "readBack", "endCall"],
       properties: {
-        intent: {
-          type: "string",
-          enum: [
-            "FAQ",
-            "CLARIFY",
-            "ADDONS",
-            "CHECK_AVAILABILITY",
-            "ASK_SLOT",
-            "ASK_INFO",
-            "REVIEW",
-            "CONFIRM",
-            "MANAGE",
-            "TRANSFER",
-            "OTHER",
-          ],
-          description: "What this turn is for. Decided before anything is said.",
+        say: { type: "string", description: "Exactly what to speak aloud to the caller." },
+        readBack: {
+          type: "boolean",
+          description: "True only if this turn read the whole booking back to them.",
         },
-        say: {
-          type: "string",
-          description: "Exactly what to speak aloud to the caller.",
-        },
-        booking: BOOKING_SCHEMA,
         endCall: {
           type: "boolean",
           description: "True only after saying goodbye on a finished call.",
@@ -162,220 +232,139 @@ export const REPLY_FORMAT = {
   },
 } as const;
 
-/**
- * What to do about a gap, with the one step that differs by channel.
- *
- * An email is worth asking for in writing and not worth a turn out loud:
- * spelling an address down a phone is slow and goes wrong, and the salon
- * already has their number either way.
- */
+/** What to do about a gap, one line each. */
+const NEXT_STEP: Record<string, string> = {
+  service: "ask which, offering the choice if two fit",
+  "extras and how many people": "offer the extras above with prices and ask how many people",
+  date: "ask which day",
+  time: "describe the free times above and ask what suits",
+  "full name": "first and last name",
+  "phone number": "",
+  confirmation: "read it all back and ask them to confirm; set readBack true",
+};
+
 const step = (gap: string, session: CallSession): string => {
   if (gap !== "phone number") return NEXT_STEP[gap] ?? "";
-
   return session.channel === "CHAT"
-    ? "Ask for the number the salon can ring them on, and for their email if they would like the confirmation sent — the email is optional, so take no for an answer and move straight on. Record whichever they give."
-    : "Ask for the number the salon can ring them back on, and record it. Skip this entirely if the booking already has one, and never ask for an email on a call.";
+    ? "the number to reach them on, and their email if they want the confirmation — email optional"
+    : "the number to reach them on";
 };
 
 /**
- * The extras that belong to the chosen service, and any that were thrown out.
+ * What the diary said, if it has been asked.
  *
- * Only for the service actually chosen. The price list carries every service's
- * extras, which is the right thing to hand over before one is picked and the
- * wrong thing after: the model has to offer from one short list, not from a
- * hundred and forty five lines.
- *
- * When something was thrown out, the caller has already been told it is coming
- * — so the correction has to reach them, with the real options beside it.
+ * It is asked in code, only once the service and its extras are settled, so
+ * the line says which of those it is: not yet, unreachable, full, this time is
+ * free, or here are the free times.
  */
-const extrasLines = (session: CallSession): string[] => {
-  const { serviceId } = session.booking;
-  if (!serviceId) return [];
-
-  const lines: string[] = [];
-  const available = session.catalogue?.addonsByService.get(serviceId) ?? [];
-
-  lines.push(
-    available.length === 0
-      ? "extras for this service: none, it takes no extras"
-      : `extras for this service: ${available
-          .map((addon) => `${addon.id}:${addon.name} $${addon.price}`)
-          .join("; ")}`,
-  );
-
-  if (session.rejectedTime) {
-    lines.push(
-      `NOT A REAL TIME: ${session.rejectedTime} is not one the diary offers — times run in ten-minute steps. It has been taken off the booking. Say so and offer the nearest that are above.`,
-    );
+const diaryLine = (session: CallSession): string => {
+  const { booking, offered } = session;
+  // Times on hand for this day, fetched for a question before the head count
+  // was known, are still the answer to that question.
+  const onHand = offered !== null && offered.date === booking.date && offered.serviceId === booking.serviceId;
+  if (!onHand && (!booking.serviceId || booking.quantity === null || !booking.date)) {
+    return "diary: not asked yet — the service and extras come first";
   }
-
-  if (session.rejectedAddons.length > 0) {
-    lines.push(
-      `DROPPED: ${session.rejectedAddons.join(", ")} — not offered with this service, so they are off the booking. Tell the caller, and offer what is above instead.`,
-    );
+  if (!offered) return "diary: could not be reached — say so and offer to take a message";
+  if (offered.slots.length === 0) return `diary: ${offered.date} is full — offer the waitlist or another day`;
+  if (booking.time && offered.slots.includes(booking.time)) {
+    return `diary: ${booking.time} on ${offered.date} is free`;
   }
-
-  return lines;
-};
-
-/**
- * What is known about the diary, and whether it still applies.
- *
- * The times on hand belong to one date. When the caller moves day — "how about
- * tomorrow?" — they are about yesterday's question, and saying "already
- * checked, do not check again" next to a date that has just changed stalled the
- * receptionist: it announced it would check, then did nothing, and the caller
- * sat in silence until they prompted it again.
- */
-const availabilityLine = (session: CallSession): string => {
-  const { offered, booking } = session;
-  if (!offered) return "availability: not checked yet";
-
-  const times = describeOffer(offered.slots);
-  const staleDate = booking.date !== null && booking.date !== offered.date;
-  const staleService =
-    booking.serviceId !== null && booking.serviceId !== offered.serviceId;
-
-  if (staleDate || staleService) {
-    return `the times you have are for ${offered.date}${
-      staleService ? " and a different service" : ""
-    }, which is no longer what the caller wants — call check_availability for ${
-      booking.date ?? "the day they want"
-    } now, in this turn`;
-  }
-
-  return `free on ${offered.date}: ${times} — already checked, do not check ${offered.date} again`;
-};
-
-/**
- * What to actually do about each gap.
- *
- * "Ask for the date" on its own was read as an instruction to keep asking, even
- * after the caller had answered — so each gap names the move that closes it
- * instead.
- */
-const NEXT_STEP: Record<string, string> = {
-  "extras and how many people":
-    "Name the extras listed under the service they chose — with their prices — and ask in the same breath whether it is just for them. Record any they want in addonIds and addonNames, and the number of people in quantity; if they want no extras, leave addonIds empty and still set quantity, which is how this step is marked done. Do not offer an extra that is not listed under their service.",
-  service:
-    "Work out which service they mean from the price list and record its id — but only if exactly one fits what they said. If two or more could, that turn is CLARIFY: offer them the choice and leave serviceId null.",
-  date: "Settle which day they want and record it as YYYY-MM-DD.",
-  time: "Call check_availability for that date, unless you already have its times. Then answer from what it returned: if the time they asked for is free, record it as HH:mm; if it is not, say so. Never tell them a time is theirs before the diary has said it is free.",
-  // Rendered per channel; see step() below.
-  "phone number": "",
-  "full name":
-    "If they have just given their name — \"Sarah Nguyen\" is both halves — record firstName and lastName and go straight on to REVIEW in this same turn. Only if you still do not have it, ask for their first and last name, and nothing else; that asking turn is ASK_INFO, and it books nothing.",
-  confirmation:
-    "Read the whole booking back — the service, any extras, how many people if more than one, the day, the time, and their first and last name — then ask them to confirm. This turn is REVIEW and it does not book. Say \"I have you down for\", never \"I have you booked\": nothing is booked until they say yes, and telling them otherwise is a promise you have not kept.",
+  return `diary: free on ${offered.date} — ${describeOffer(offered.slots)}`;
 };
 
 /**
  * The state, written out for the model, fed in fresh every turn.
  *
- * It goes after the transcript rather than into the opening instructions
- * because the last thing a model reads carries the most weight — and what it
- * keeps getting wrong is running ahead of what the caller has actually said.
+ * Current, not a turn behind: what the caller just said has already been
+ * taken down and checked by the time this is built.
  */
-export const briefing = (session: CallSession): string => {
+export const briefing = (session: CallSession, intent: Intent = "BOOK"): string => {
   const { booking } = session;
 
-  /*
-   * Someone changing an appointment is not making one, and the two must not be
-   * shown at once. Handed the empty new-booking form alongside the one they
-   * had found, the model moved the old booking and then started taking details
-   * for a new one off the back of the same "yes".
-   */
   if (session.managing) {
     const held = session.managing;
     return `THEIR EXISTING BOOKING — they are changing this, not making a new one.
 ${held.serviceName ?? "service"}${held.addonNames.length > 0 ? ` with ${held.addonNames.join(", ")}` : ""}, ${held.quantity} ${held.quantity === 1 ? "person" : "people"}, currently ${held.startTime}, under ${held.firstName} ${held.lastName}.
-
-The service, the extras and the number of people do not change — only the day and the time.
+Only the day and the time change.
 ${
   session.reviewed
-    ? "You have read it back to them. A yes now means do it: call reschedule_booking or cancel_booking."
-    : "Read it back — what it is and when — with what they want done, and wait for them to say yes. A question like \"could I make it two?\" is them asking, not agreeing."
+    ? "Read back already. A yes now means do it: call reschedule_booking or cancel_booking."
+    : "Read it back — what it is, when, and what they want done — set readBack true, and wait for their yes. A question is not a yes."
 }
-Do not call create_booking. Nothing new is being booked.`;
+Never call create_booking.`;
   }
 
-  /*
-   * Still looking. They have said they want to change something but nothing
-   * has been found yet, and the new-booking checklist is the wrong thing to
-   * put in front of them — it sent the model hunting for a service when what
-   * it needed was their number and the time of the appointment they have.
-   */
   if (session.lastIntent === "MANAGE" && !session.bookingPublicId) {
     return `THEY ARE CHANGING AN EXISTING BOOKING, not making one.
-
-You need two things to find it, and nothing else: the phone number they are
-calling from, said out loud, and the day the appointment is on. Not the exact
-time — people remember the day far better than the minute. Ask for whatever is
-still missing, then call find_booking.
-
-If nothing comes back, say plainly that you cannot find a booking on that day
-for that number, and ask whether it might be a different day.
-
-Do not ask which service it is — the booking knows. Do not settle a service, a
-day or extras as though this were a new booking, and do not call
-check_availability until the booking has been found.`;
+To find it you need two things only: the number they are calling from, said aloud, and the day it is on. Ask for whichever is missing, then call find_booking.
+Nothing found: say so plainly and ask if it might be another day.
+Do not ask which service, do not settle a service or day, and do not call check_availability until it is found.`;
   }
 
   if (session.bookingPublicId) {
     return `BOOKING SO FAR
-Booked already, reference ${session.bookingPublicId}. It is done — never book again.
-Answer anything else they ask, then say goodbye and set endCall.`;
+Booked already, reference ${session.bookingPublicId}. Done — never book again. Answer anything else, then say goodbye and set endCall.`;
   }
 
-  /*
-   * Printed as the very object the model has to send back, rather than as
-   * prose. Written out in words it read "time: not yet" and dutifully returned
-   * "not yet" as the time — a placeholder meant for a human went into the
-   * booking as a value. JSON with nulls in it has nothing to misread.
-   */
+  const service = booking.serviceId
+    ? session.catalogue?.serviceById.get(booking.serviceId)
+    : undefined;
+  const extrasOnOffer = booking.serviceId
+    ? (session.catalogue?.addonsByService.get(booking.serviceId) ?? [])
+    : [];
+
   const lines = [
-    "BOOKING SO FAR — this is your `booking` object. Send it back with the nulls",
-    "you can now fill in, and never with a field emptied that already had a value.",
-    JSON.stringify(booking),
-    `caller's phone (already known, never ask): ${session.phone}`,
-    availabilityLine(session),
-    ...extrasLines(session),
+    "BOOKING SO FAR",
+    `service: ${service ? `${service.name} $${service.price}, ${service.durationMinutes} min` : "not settled"}`,
+    `extras: ${booking.addonNames.length > 0 ? booking.addonNames.join(", ") : booking.quantity === null ? "not asked yet" : "none"}`,
+    `people: ${booking.quantity ?? "not asked yet"}`,
+    `day: ${booking.date ?? "not settled"} · time: ${booking.time ?? "not settled"}`,
+    `name: ${[booking.firstName, booking.lastName].filter(Boolean).join(" ") || "not given"}`,
+    session.channel === "PHONE"
+      ? `phone: ${session.phone} (caller ID, never ask)`
+      : `phone: ${booking.phone ?? "not given"} · email: ${booking.email ?? "not given"}`,
   ];
 
+  if (booking.serviceId) {
+    lines.push(
+      extrasOnOffer.length === 0
+        ? "extras for this service: none"
+        : `extras for this service: ${extrasOnOffer.map((a) => `${a.name} $${a.price}`).join("; ")}`,
+    );
+  }
+  if (session.rejectedAddons.length > 0) {
+    lines.push(
+      `DROPPED: ${session.rejectedAddons.join(", ")} — not offered with this service. Say so and offer what is above.`,
+    );
+  }
+
+  lines.push(diaryLine(session));
+  if (session.rejectedTime) {
+    lines.push(`NOT FREE: ${session.rejectedTime}. Say so and offer the nearest of the times above.`);
+  }
   if (session.waitlisted) lines.push("they are already on the waitlist");
 
-  /*
-   * Listed in full rather than one at a time. The state is a turn behind what
-   * the caller just said, so naming only the first gap had it asking for a name
-   * in the same breath as writing that name down. Given the whole list it can
-   * cross off what it just heard and move to the next one itself.
-   */
   const gaps = missingFields(booking);
   lines.push("");
+  /*
+   * A question is not a booking turn. Told what was "still missing", the
+   * model answered "what is dipping powder?" and then asked about extras and
+   * head count, as the list said to. On a question the list stays out; the
+   * topic's own instructions say what to do after the answer.
+   */
+  if (intent === "FAQ" || intent === "OTHER") {
+    lines.push("They are asking, not booking. Answer, then at most one short offer to book. Do not collect any of the details above.");
+    return lines.join("\n");
+  }
   if (gaps.length === 0) {
     lines.push("Nothing is missing. Call create_booking now.");
-  } else if (gaps.length === 1 && gaps[0] === "confirmation") {
-    /*
-     * Worth its own case. Buried in a list this step got read as "read it back
-     * again", and the caller who had already said yes was asked a third time.
-     */
-    lines.push(
-      "Everything is settled and you have already read it back. The only thing",
-      "left is their yes.",
-      "If their last message is a yes of any kind — \"yes\", \"that's right\",",
-      "\"please book it\", \"go ahead\", \"perfect\" — then set confirmed true and call",
-      "create_booking NOW, in this turn. Do not read the booking back again.",
-      "Only if they changed something do you deal with that instead.",
-    );
+  } else if (session.reviewed && gaps.length === 1 && gaps[0] === "confirmation") {
+    lines.push("Read back already; only their yes is missing. Do not read it back again.");
   } else {
     lines.push(
-      "WHAT IS LEFT, in order. This list is one turn behind: record whatever the",
-      "caller has just said, then do the first of these still undone, and only that.",
-      ...gaps.map((gap, index) => `${index + 1}. ${gap} — ${step(gap, session)}`),
-      "",
-      "A plain yes to a booking you have just read back is the confirmation: set",
-      "confirmed true and call create_booking in that same turn, without asking again.",
-      "Never ask for something you have been told, and never check another day unasked.",
+      "STILL MISSING, in order — ask for the first:",
+      ...gaps.map((gap, index) => `${index + 1}. ${gap}: ${step(gap, session)}`),
     );
   }
 
