@@ -20,6 +20,15 @@ export const createSalonData = (organizationId: number) => {
   return {
     organizationId,
 
+    /** Where the salon is with connecting a bank account for payouts. */
+    paymentSetup: () => once("paymentSetup", async () => {
+      const row = await prisma.organization.findUniqueOrThrow({
+        where: { id: organizationId },
+        select: { payoutStatus: true, stripeAccountId: true, currency: true },
+      });
+      return { payoutStatus: row.payoutStatus, hasStripeAccount: row.stripeAccountId !== null, currency: row.currency };
+    }),
+
     salonHours: () => once("salonHours", async () => {
       const rows = await prisma.workingHour.findMany({ where: { organizationId }, orderBy: { dayOfWeek: "asc" } });
       return rows.map(({ dayOfWeek, openTime, closeTime, isClosed }) => ({ dayOfWeek, openTime, closeTime, isClosed }));

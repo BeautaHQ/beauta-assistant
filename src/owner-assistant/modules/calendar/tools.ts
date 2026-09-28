@@ -2,7 +2,7 @@ import { availableTimes, isTimeAvailable, staffAvailableTimes } from "../../avai
 import { toE164 } from "../../phone";
 import { WEEKDAYS, inSalonTime, isDate, isTime } from "../../rules";
 import type { CreateBookingAction, OwnerAction } from "../../types";
-import { refuse, tool, type Tool, type ToolContext } from "../../toolkit";
+import { refuse, resolveStaff, tool, type Tool, type ToolContext } from "../../toolkit";
 
 const int = { type: "integer" };
 
@@ -253,15 +253,16 @@ export const bookingChangeTools: Tool[] = [
     });
   }),
 
-  tool("propose_reassign_staff", "Propose a different staff member for a scheduled booking, same day and time. The whole booking — service and addons — moves to them. For a booking for several customers, ask the owner which customer's staff to change.", {
-    bookingId: int, staffId: int,
+  tool("propose_reassign_staff", "Propose a different staff member for a scheduled booking, same day and time. The whole booking — service and addons — moves to them. For a booking for several customers, ask the owner which customer's staff to change. staffName is the name the owner used; it must match the staff member the id points to.", {
+    bookingId: int, staffId: int, staffName: { type: "string" },
   }, async (args, context) => {
-    const item = args as { bookingId: number; staffId: number };
+    const item = args as { bookingId: number; staffId: number; staffName: string };
     const found = await existingBooking(context, item.bookingId);
     if (!found.booking) return refuse(found.problem!);
     const booking = found.booking;
-    const staff = (await context.data.staff()).find((row) => row.id === item.staffId);
-    if (!staff) return refuse(`no staff member with id ${item.staffId}; call list_staff`);
+    const resolved = await resolveStaff(context, item.staffId, item.staffName);
+    if (!resolved.staff) return refuse(resolved.problem!);
+    const staff = (await context.data.staff()).find((row) => row.id === resolved.staff!.id)!;
 
     /*
      * The four checks a person would make, in the order they would make them:
