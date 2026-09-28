@@ -5,6 +5,8 @@ import { calendarKnowledge } from "./calendar/knowledge";
 import { bookingChangeTools, bookingTools, calendarTools } from "./calendar/tools";
 import { customersKnowledge } from "./customers/knowledge";
 import { customersTools } from "./customers/tools";
+import { analyticsKnowledge } from "./analytics/knowledge";
+import { analyticsTools } from "./analytics/tools";
 import { paymentsKnowledge } from "./payments/knowledge";
 import { paymentsTools } from "./payments/tools";
 import { supportKnowledge } from "./support/knowledge";
@@ -36,6 +38,14 @@ export const MODULES: Module[] = [
     knowledge: customersKnowledge,
     tools: customersTools,
     // Looks only, for now: nothing to run.
+    runOrder: [],
+  },
+  {
+    name: "analytics",
+    summary: "how the salon is doing over any range of dates: number of bookings by status, revenue from completed bookings, busiest days, bookings per staff member, most-booked services, new customers",
+    knowledge: analyticsKnowledge,
+    tools: analyticsTools,
+    // Numbers only: nothing to run.
     runOrder: [],
   },
   {

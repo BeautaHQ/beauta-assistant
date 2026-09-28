@@ -187,6 +187,45 @@ export const createSalonData = (organizationId: number) => {
       }));
     }),
 
+    /** Days the salon opens differently from its week, or not at all, between two dates inclusive. */
+    specialDays: (startDate: string, endDate: string) => once(`specialDays:${startDate}:${endDate}`, async () => {
+      const rows = await prisma.workingHourOverride.findMany({
+        where: { organizationId, deletedAt: null, date: { gte: startDate, lte: endDate } },
+        orderBy: { date: "asc" },
+        select: { date: true, openTime: true, closeTime: true, isClosed: true },
+      });
+      return rows;
+    }),
+
+    /**
+     * Every real booking starting between two salon-time dates inclusive,
+     * with what the numbers are made of. Legacy imports are left out: they
+     * are history from before Beauta, not this salon's trade on Beauta.
+     */
+    bookingsBetween: (startDate: string, endDate: string, timezone: string) => once(`between:${startDate}:${endDate}`, async () => {
+      const from = new Date(Date.parse(`${startDate}T00:00:00Z`) - 86_400_000);
+      const to = new Date(Date.parse(`${endDate}T00:00:00Z`) + 2 * 86_400_000);
+      const rows = await prisma.booking.findMany({
+        where: { organizationId, source: { not: "LEGACY_IMPORT" }, startTime: { gte: from, lt: to } },
+        orderBy: { startTime: "asc" },
+        select: {
+          id: true, startTime: true, status: true, quantity: true, finalPrice: true, amountPaid: true, source: true, customerId: true,
+          bookingPaymentType: true,
+          bookingTasks: { where: { deletedAt: null }, select: { service: { select: { name: true } }, addon: { select: { name: true } }, staff: { select: { name: true } } } },
+        },
+      });
+      const dayOf = (when: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(when);
+      return rows
+        .map((row) => ({ ...row, day: dayOf(row.startTime) }))
+        .filter((row) => row.day >= startDate && row.day <= endDate);
+    }),
+
+    /** Customers first seen between two dates inclusive (by when their record was made). */
+    newCustomersBetween: (startDate: string, endDate: string) => once(`newCustomers:${startDate}:${endDate}`, async () =>
+      prisma.customer.count({
+        where: { organizationId, createdAt: { gte: new Date(`${startDate}T00:00:00Z`), lt: new Date(Date.parse(`${endDate}T00:00:00Z`) + 86_400_000) } },
+      })),
+
     currency: () => once("currency", async () =>
       (await prisma.organization.findUniqueOrThrow({ where: { id: organizationId }, select: { currency: true } })).currency),
 

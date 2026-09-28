@@ -1,4 +1,4 @@
-import { describeWeek, isDate, isTime, outsideSalonHours, sameName, staffDayProblems, withDays } from "../../rules";
+import { describeWeek, isDate, isTime, outsideSalonHours, sameName, staffDayProblems, WEEKDAYS, withDays } from "../../rules";
 import { describeSalonWeek } from "../../rules";
 import { effectiveSalonHours, refuse, resolveStaff, tool, type Tool, type ToolContext } from "../../toolkit";
 import type { CreateAddonAction, CreateServiceAction, CreateStaffAction, DayHours, OwnerAction, UpdateAddonAction, UpdateServiceAction } from "../../types";
@@ -31,6 +31,20 @@ const read: Tool[] = [
       const days = await effectiveSalonHours(context);
       return { week: describeSalonWeek(days), days };
     }),
+  tool("get_special_days", "Days between startDate and endDate (YYYY-MM-DD, inclusive, at most 92 days) on which the salon opens at different hours than its week, or is closed. Empty means every day in the range follows the regular week.", {
+    startDate: str, endDate: str,
+  }, async (args, context) => {
+    const item = args as { startDate: string; endDate: string };
+    if (!isDate(item.startDate) || !isDate(item.endDate) || item.startDate > item.endDate) return refuse("startDate and endDate must be YYYY-MM-DD, start no later than end");
+    if (Date.parse(item.endDate) - Date.parse(item.startDate) > 92 * 86_400_000) return refuse("at most 92 days at a time");
+    const days = await context.data.specialDays(item.startDate, item.endDate);
+    return {
+      specialDays: days.map((day) => ({
+        date: day.date, weekday: WEEKDAYS[((new Date(`${day.date}T00:00:00Z`).getUTCDay() + 6) % 7) + 1],
+        ...(day.isClosed ? { closed: true } : { openTime: day.openTime, closeTime: day.closeTime }),
+      })),
+    };
+  }),
   tool("list_staff", "Every staff member: id, name, phone, active flag, assigned service ids and addon ids, weekly working hours.", {},
     async (_args, { data }) => ({ staff: (await data.staff()).map((staff) => ({ ...staff, week: describeWeek(staff.workingHours) })) })),
   tool("list_services", "Every service: id, name, price, duration in minutes, status, group. Names are not unique.", {},
