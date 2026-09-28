@@ -9,6 +9,7 @@
 export const catalogKnowledge = `STAFF, SERVICES AND ADDONS
 - Service: what customers book (price, minutes; PUBLIC shows on the booking page, PRIVATE is salon-only). Addon: an extra attached to services, offered only with them.
 - Staff: weekly hours for all 7 days, inside the salon's opening hours, plus the services and addons they do. Staff with no services cannot be booked.
+- The salon's opening hours are a regular week (get_salon_working_hours) plus special days (get_special_days): a date closed outright, or open at other hours, which replaces the week for that date. Asked whether the salon is open on a date, check both. You cannot change either yet: point the owner to Working Hours or Holiday & Special Days.
 - Assign only the services and addons the owner names. If they name none for a new staff member, assign none and mention they cannot be booked until they have some; never assign everything on your own.
 - A block is time off on specific dates; changing usual weekly hours is a staff update.
 - Commission: the percentage of the price a staff member earns. Each rate belongs to one staff member: a general rate for everything they do, and optional rates for single services or addons that override it. Setting a rate replaces the current one for the same staff and item. Removing a single-item rate makes that item fall back to the general rate.
