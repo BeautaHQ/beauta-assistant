@@ -128,10 +128,15 @@ export type ReassignStaffAction = {
   fromStaff: string[]; staffId: number; staffName: string; taskIds: number[];
 };
 
+/** A job for Beauta's own team, filed as a request on the owner's behalf. */
+export type CreateRequestAction = {
+  type: "CREATE_REQUEST"; requestType: "ACCOUNT_SETUP" | "DATA_MIGRATION" | "DATA_EXPORT"; content: string;
+};
 export type OwnerAction =
   | CreateServiceAction | UpdateServiceAction | CreateAddonAction | UpdateAddonAction
   | CreateStaffAction | UpdateStaffAction | CreateStaffBlockAction | SetCommissionAction | RemoveCommissionAction
-  | CreateBookingAction | RescheduleBookingAction | CancelBookingAction | ReassignStaffAction;
+  | CreateBookingAction | RescheduleBookingAction | CancelBookingAction | ReassignStaffAction
+  | CreateRequestAction;
 
 export type OwnerAssistantResult = {
   /** The main message, plain text in the owner's language. */

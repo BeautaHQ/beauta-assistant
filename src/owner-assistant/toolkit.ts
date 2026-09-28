@@ -55,6 +55,55 @@ export const tool = (name: string, description: string, properties: Json, run: T
 
 export const refuse = (...problems: string[]) => ({ ok: false, problems });
 
+/**
+ * The staff member a proposal is about, by id AND name together.
+ *
+ * Handed an id alone, the model guessed: asked to give "Linh" a day off when
+ * no Linh existed, it tried id 0, was refused, and tried id 1 — and proposed
+ * the day off for Jennie. The name is what the owner actually said, so the
+ * id has to agree with it; a name that matches nobody is refused outright,
+ * with the instruction to say so rather than pick someone else. Temporary
+ * ids from this reply's own CREATE_STAFF proposals count as staff too.
+ */
+export const resolveStaff = async (
+  context: ToolContext,
+  staffId: number,
+  staffName: string,
+  options: { allowPending?: boolean } = {},
+): Promise<{ staff: { id: number; name: string } | null; problem: string | null }> => {
+  const wanted = staffName?.trim() ?? "";
+  const lower = (value: string) => value.trim().toLowerCase().replace(/\s+/g, " ");
+  const existing = (await context.data.staff()).map((row) => ({ id: row.id, name: row.name }));
+  const pending = options.allowPending
+    ? context.batch.pending("CREATE_STAFF").map((row) => ({ id: row.tempId, name: row.name }))
+    : [];
+  const everyone = [...existing, ...pending];
+
+  /*
+   * Owners use first names. "Jennie" is Jennie Hoang when she is the only
+   * Jennie; the name matches whole, or as a whole word of the full name.
+   */
+  const matches = (full: string) => {
+    const a = lower(full);
+    const b = lower(wanted);
+    return a === b || a.split(" ").includes(b) || a.startsWith(`${b} `) || a.endsWith(` ${b}`);
+  };
+
+  const byId = everyone.find((row) => row.id === staffId);
+  if (byId && wanted && matches(byId.name)) return { staff: byId, problem: null };
+
+  const byName = wanted ? everyone.filter((row) => matches(row.name)) : [];
+  if (byName.length === 1) return { staff: byName[0]!, problem: null };
+  if (byName.length > 1) {
+    return { staff: null, problem: `several staff are named ${wanted} (ids ${byName.map((row) => row.id).join(", ")}); ask the owner which one` };
+  }
+  if (byId && wanted) {
+    return { staff: null, problem: `staff id ${staffId} is ${byId.name}, not ${wanted}. Nobody here is named ${wanted}: tell the owner so and propose nothing for anyone else` };
+  }
+  if (!wanted) return { staff: null, problem: "staffName is required: the name the owner used" };
+  return { staff: null, problem: `no staff member named ${wanted}. Tell the owner so and propose nothing for anyone else; the staff are ${everyone.map((row) => row.name).join(", ") || "none"}` };
+};
+
 export const createBatch = (): Batch => {
   const proposals: OwnerAction[] = [];
   let tempId = -1;

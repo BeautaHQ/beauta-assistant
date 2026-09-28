@@ -1,6 +1,6 @@
 import { describeWeek, isDate, isTime, outsideSalonHours, sameName, staffDayProblems, withDays } from "../../rules";
 import { describeSalonWeek } from "../../rules";
-import { effectiveSalonHours, refuse, tool, type Tool, type ToolContext } from "../../toolkit";
+import { effectiveSalonHours, refuse, resolveStaff, tool, type Tool, type ToolContext } from "../../toolkit";
 import type { CreateAddonAction, CreateServiceAction, CreateStaffAction, DayHours, OwnerAction, UpdateAddonAction, UpdateServiceAction } from "../../types";
 
 const str = { type: "string" };
@@ -192,12 +192,13 @@ const propose: Tool[] = [
     });
   }),
 
-  tool("propose_update_staff", "Propose changing an existing staff member: add or remove services and addons, and/or change some days' hours (list only the days that change).", {
-    staffId: int, addServiceIds: ids, removeServiceIds: ids, addAddonIds: ids, removeAddonIds: ids, workingHours: staffDays,
+  tool("propose_update_staff", "Propose changing an existing staff member: add or remove services and addons, and/or change some days' hours (list only the days that change). staffName is the name the owner used; it must match the staff member the id points to.", {
+    staffId: int, staffName: str, addServiceIds: ids, removeServiceIds: ids, addAddonIds: ids, removeAddonIds: ids, workingHours: staffDays,
   }, async (args, context) => {
-    const item = args as { staffId: number; addServiceIds: number[]; removeServiceIds: number[]; addAddonIds: number[]; removeAddonIds: number[]; workingHours: DayHours[] };
-    const staff = (await context.data.staff()).find((row) => row.id === item.staffId);
-    if (!staff) return refuse(`no staff member with id ${item.staffId}; call list_staff`);
+    const item = args as { staffId: number; staffName: string; addServiceIds: number[]; removeServiceIds: number[]; addAddonIds: number[]; removeAddonIds: number[]; workingHours: DayHours[] };
+    const resolved = await resolveStaff(context, item.staffId, item.staffName);
+    if (!resolved.staff) return refuse(resolved.problem!);
+    const staff = (await context.data.staff()).find((row) => row.id === resolved.staff!.id)!;
     const problems = staffDayProblems(item.workingHours, false);
     const badServices = unknown([...item.addServiceIds, ...item.removeServiceIds], await knownServiceIds(context));
     const badAddons = unknown([...item.addAddonIds, ...item.removeAddonIds], await knownAddonIds(context));
@@ -222,12 +223,13 @@ const propose: Tool[] = [
     }, { changedDays: describeWeek(changedDays), weekAfterChange: describeWeek(withDays(staff.workingHours, changedDays)) });
   }),
 
-  tool("propose_staff_block", "Propose time off for an existing staff member on specific dates (YYYY-MM-DD). allDay with null times for whole days.", {
-    staffId: int, startDate: str, endDate: str, startTime: nullableStr, endTime: nullableStr, allDay: bool, reason: nullableStr,
+  tool("propose_staff_block", "Propose time off for an existing staff member on specific dates (YYYY-MM-DD). allDay with null times for whole days. staffName is the name the owner used; it must match the staff member the id points to.", {
+    staffId: int, staffName: str, startDate: str, endDate: str, startTime: nullableStr, endTime: nullableStr, allDay: bool, reason: nullableStr,
   }, async (args, context) => {
-    const item = args as { staffId: number; startDate: string; endDate: string; startTime: string | null; endTime: string | null; allDay: boolean; reason: string | null };
-    const staff = (await context.data.staff()).find((row) => row.id === item.staffId);
-    if (!staff) return refuse(`no staff member with id ${item.staffId}; call list_staff`);
+    const item = args as { staffId: number; staffName: string; startDate: string; endDate: string; startTime: string | null; endTime: string | null; allDay: boolean; reason: string | null };
+    const resolved = await resolveStaff(context, item.staffId, item.staffName);
+    if (!resolved.staff) return refuse(resolved.problem!);
+    const staff = resolved.staff;
     const problems: string[] = [];
     if (!isDate(item.startDate) || !isDate(item.endDate)) problems.push("dates must be YYYY-MM-DD");
     if (!item.allDay && (!isTime(item.startTime) || !isTime(item.endTime))) problems.push("a part-day block needs both times as HH:mm; ask the owner rather than guessing");
@@ -242,13 +244,14 @@ const propose: Tool[] = [
     });
   }),
 
-  tool("propose_set_commission", "Propose a staff member's commission percentage (0-100): their general rate when itemType and itemId are null, or a rate for one service or addon. Replaces the current rate for that staff and item. staffId and itemId may be temporary ids from this reply.", {
-    staffId: int, itemType: { type: ["string", "null"], enum: ["SERVICE", "ADDON", null] }, itemId: { type: ["integer", "null"] }, percentage: { type: "number" },
+  tool("propose_set_commission", "Propose a staff member's commission percentage (0-100): their general rate when itemType and itemId are null, or a rate for one service or addon. Replaces the current rate for that staff and item. staffId and itemId may be temporary ids from this reply; staffName is the name the owner used and must match.", {
+    staffId: int, staffName: str, itemType: { type: ["string", "null"], enum: ["SERVICE", "ADDON", null] }, itemId: { type: ["integer", "null"] }, percentage: { type: "number" },
   }, async (args, context) => {
-    const item = args as { staffId: number; itemType: "SERVICE" | "ADDON" | null; itemId: number | null; percentage: number };
-    const staffName = (await context.data.staff()).find((row) => row.id === item.staffId)?.name
-      ?? context.batch.pending("CREATE_STAFF").find((row) => row.tempId === item.staffId)?.name;
-    if (!staffName) return refuse(`no staff member with id ${item.staffId}; call list_staff`);
+    const given = args as { staffId: number; staffName: string; itemType: "SERVICE" | "ADDON" | null; itemId: number | null; percentage: number };
+    const resolved = await resolveStaff(context, given.staffId, given.staffName, { allowPending: true });
+    if (!resolved.staff) return refuse(resolved.problem!);
+    const item = { ...given, staffId: resolved.staff.id };
+    const staffName = resolved.staff.name;
     const problems: string[] = [];
     if (!(item.percentage >= 0 && item.percentage <= 100) || Math.round(item.percentage * 100) !== item.percentage * 100) problems.push("percentage must be 0-100 with at most 2 decimals");
     if ((item.itemType === null) !== (item.itemId === null)) problems.push("itemType and itemId go together: both null for the general rate, or both set");

@@ -5,6 +5,10 @@ import { calendarKnowledge } from "./calendar/knowledge";
 import { bookingChangeTools, bookingTools, calendarTools } from "./calendar/tools";
 import { customersKnowledge } from "./customers/knowledge";
 import { customersTools } from "./customers/tools";
+import { paymentsKnowledge } from "./payments/knowledge";
+import { paymentsTools } from "./payments/tools";
+import { supportKnowledge } from "./support/knowledge";
+import { supportTools } from "./support/tools";
 
 /**
  * Every module the agent can load. It starts with only their summaries and
@@ -33,5 +37,20 @@ export const MODULES: Module[] = [
     tools: customersTools,
     // Looks only, for now: nothing to run.
     runOrder: [],
+  },
+  {
+    name: "payments",
+    summary: "getting paid: whether the salon's bank account is connected (Stripe), why online payment or gift card sales are not working, and how to connect",
+    knowledge: paymentsKnowledge,
+    tools: paymentsTools,
+    // Reads only: connecting a bank account happens on Stripe's own form.
+    runOrder: [],
+  },
+  {
+    name: "support",
+    summary: "asking Beauta's team to do work for the salon: set the account up from a menu or price list, migrate data in from another system, or export the salon's data",
+    knowledge: supportKnowledge,
+    tools: supportTools,
+    runOrder: ["CREATE_REQUEST"],
   },
 ];
