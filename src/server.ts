@@ -11,6 +11,7 @@ import {
   PORT,
   PUBLIC_URL,
   TWILIO_AUTH_TOKEN,
+  TWILIO_VOICE_AUTH_TOKEN,
   VERIFY_TWILIO_SIGNATURE,
 } from "./config";
 import { incomingCallRouter } from "./routes/IncomingCallRoute";
@@ -123,9 +124,9 @@ const assertConfigured = () => {
   if (!OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY is required — the receptionist needs it to answer");
   }
-  if (VERIFY_TWILIO_SIGNATURE && !TWILIO_AUTH_TOKEN) {
+  if (VERIFY_TWILIO_SIGNATURE && !TWILIO_AUTH_TOKEN && !TWILIO_VOICE_AUTH_TOKEN) {
     throw new Error(
-      "TWILIO_AUTH_TOKEN is required unless VERIFY_TWILIO_SIGNATURE=false",
+      "TWILIO_VOICE_AUTH_TOKEN or TWILIO_AUTH_TOKEN is required unless VERIFY_TWILIO_SIGNATURE=false",
     );
   }
 };

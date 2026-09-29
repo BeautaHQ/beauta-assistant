@@ -25,6 +25,16 @@ export const PUBLIC_URL = (process.env.PUBLIC_URL ?? "").replace(/\/$/, "");
 export const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN ?? "";
 
 /**
+ * The auth token calls are signed with, when it is not the account's main one.
+ *
+ * Twilio keeps credentials per region: a number whose active region is
+ * Australia (AU1) has its calls signed with the AU1 auth token, not the US1
+ * one the rest of Beauta (SMS) uses. Set this to the AU1 live auth token.
+ * Both are accepted, so a number still processed in US1 keeps working.
+ */
+export const TWILIO_VOICE_AUTH_TOKEN = process.env.TWILIO_VOICE_AUTH_TOKEN ?? "";
+
+/**
  * Off only for local tunnels. Never off in a deployed environment: /incoming is
  * a public URL, and without the check anyone can make this service answer.
  */

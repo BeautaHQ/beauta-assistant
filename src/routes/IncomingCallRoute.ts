@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 
 import { isValidTwilioSignature } from "../auth/twilioSignature";
-import { FORWARD_UNKNOWN_TO, LANGUAGE, handoffUrl, relayUrl } from "../config";
+import { FORWARD_UNKNOWN_TO, LANGUAGE, PUBLIC_URL, handoffUrl, relayUrl } from "../config";
 import { openingLine } from "../salon/greeting";
 import { salonForCall } from "../salon/lookup";
 import {
@@ -18,6 +18,8 @@ interface IncomingCallBody {
   /** The number dialled — our Twilio number. Identifies which salon was called. */
   To?: string;
   ForwardedFrom?: string;
+  /** The Twilio account the number belongs to — and whose auth token signed this request. */
+  AccountSid?: string;
 }
 
 /**
@@ -42,8 +44,20 @@ export const incomingCallRouter = (app: FastifyInstance) => {
     },
     async (request, reply) => {
       if (!isValidTwilioSignature(request, "/incoming")) {
+        /*
+         * The two things a mismatch is almost always about, and neither is a
+         * secret: which Twilio account signed this (a number bought in another
+         * account or subaccount is signed with that account's token), and the
+         * URL the signature was checked against.
+         */
         request.log.warn(
-          { event: "twilio_signature_rejected" },
+          {
+            event: "twilio_signature_rejected",
+            accountSid: request.body?.AccountSid,
+            to: request.body?.To,
+            checkedUrl: `${PUBLIC_URL}/incoming`,
+            hasSignature: typeof request.headers["x-twilio-signature"] === "string",
+          },
           "Rejected webhook",
         );
         return reply.status(403).send("Forbidden");
