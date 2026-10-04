@@ -26,6 +26,13 @@ export interface BookingState {
   date: string | null;
   /** HH:mm, 24-hour, and only ever one check_availability returned. */
   time: string | null;
+  /**
+   * Further start times, each one more booking of one person: "three of us,
+   * nine, ten and one o'clock". A booking is one start time in the diary, so
+   * a party spread over the day is several bookings, taken down once and made
+   * together when they say yes. Empty for the ordinary single booking.
+   */
+  moreTimes: string[];
   firstName: string | null;
   lastName: string | null;
   /**
@@ -55,6 +62,7 @@ export const emptyBooking = (): BookingState => ({
   quantity: null,
   date: null,
   time: null,
+  moreTimes: [],
   firstName: null,
   lastName: null,
   phone: null,
@@ -155,6 +163,8 @@ export const mergeBooking = (
     quantity: update.quantity ?? current.quantity,
     date: real(update.date) ?? current.date,
     time: real(update.time) ?? current.time,
+    // Given explicitly or not at all; an empty list given on purpose clears it.
+    moreTimes: update.moreTimes ?? current.moreTimes,
     firstName: real(update.firstName) ?? current.firstName,
     lastName: real(update.lastName) ?? current.lastName,
     phone: real(update.phone) ?? current.phone,

@@ -56,7 +56,7 @@ if (lines.length === 0) {
 const run = async () => {
   const { salon, matchedOn } = await salonForCall(process.env.VOICE_TO ?? null, null);
   console.log(`SALON: ${salon.name} (org ${salon.organizationId}, ${salon.timezone}) matched on ${matchedOn}`);
-  const session = newSession(`cnv_dev_${Date.now()}`, "+61400111222", salon, "PHONE");
+  const session = newSession(`cnv_dev_${Date.now()}`, "+61400111222", salon, process.env.VOICE_CHANNEL === "CHAT" ? "CHAT" : "PHONE");
   session.toNumber = process.env.VOICE_TO ?? null;
   session.catalogue = await getCatalogue(salon.organizationId);
   await openCall(session);

@@ -72,6 +72,10 @@ export interface Filled {
   date: string | null;
   /** HH:mm, 24-hour */
   time: string | null;
+  /** Every clock time they named, HH:mm, in order; `time` is the first. Several means one person per time. */
+  times: string[];
+  /** True when they leave the time to the receptionist: "any time", "you pick". The code then takes the earliest free one. */
+  anyTime: boolean;
   firstName: string | null;
   lastName: string | null;
   /** Chat only. On a call the number is caller ID and never comes from here. */
@@ -126,6 +130,8 @@ const TURN_FORMAT = {
             "quantity",
             "date",
             "time",
+            "times",
+            "anyTime",
             "firstName",
             "lastName",
             "phone",
@@ -140,6 +146,8 @@ const TURN_FORMAT = {
             quantity: nullable("integer"),
             date: nullable("string"),
             time: nullable("string"),
+            times: { type: "array", items: { type: "string" } },
+            anyTime: { type: "boolean" },
             firstName: nullable("string"),
             lastName: nullable("string"),
             phone: nullable("string"),
@@ -197,14 +205,14 @@ ${session.catalogue?.servicesText ?? "SERVICES\n(none loaded)"}
 
 ${session.catalogue?.extrasText ?? "EXTRAS\n(none loaded)"}
 
-filled: only what their LAST message states — whether they are booking or only asking; a question about a service on a day fills the service and the day. Service and extras by the exact name and id above; a service that could be two is null. Once a service is known, a name that is on EXTRAS is an extra. changeService is true only if they say they want to change, switch or swap the chosen service, or say "instead" — naming a service is not a change, and a name on both lists is an extra. Day as YYYY-MM-DD, time as HH:mm 24-hour, number as they gave it. quantity is how many people, only from words about people ("just me", "two of us", "3 người"); a number beside giờ, pm, am or o'clock is a time, not a count. Null or [] when not said.
+filled: only what their LAST message states — whether they are booking or only asking; a plain yes to a day or time the receptionist just proposed fills that day or time; a question about a service on a day fills the service and the day. Service and extras by the exact name and id above; a service that could be two is null. Once a service is known, a name that is on EXTRAS is an extra. changeService is true only if they say they want to change, switch or swap the chosen service, say "instead", or pick an option the receptionist just offered ("the cheaper one", "the second one") — then serviceName is that option. Naming a service is not a change, and a name on both lists is an extra. Day as YYYY-MM-DD — a day named without a year is the next such date from today, never a question; time as HH:mm 24-hour, number as they gave it. times is every clock time they named for the appointments, in order ("9, 10 and 1pm, one each" is three); time is the first of them. anyTime is true only when they leave the time to you ("any time", "you pick", "whatever is free"). quantity is how many people, only from words about people ("just me", "two of us", "3 người"); a number beside giờ, pm, am or o'clock is a time, not a count. Null or [] when not said.
 
 intent:
-BOOK      they want an appointment made, at any step of one.
+BOOK      they want an appointment made, at any step of one — including any answer to a question you asked while booking, even "I don't know", and leaving a choice to you ("any time", "you pick").
 CONFIRM   a plain yes to the read-back. A name is not a yes. A time is not a yes.
 MANAGE    move or cancel a booking they already have.
-FAQ       a question, not a request to book. Then topic: PRICE (price, duration, what is offered), AVAILABILITY (whether a day or time is free for an appointment), SALON (whether or when the salon is open, address, parking, policies, anything about the salon itself), HOWTO (how or where to book), GIFTCARD (buying, giving or using a gift card or voucher, or the balance on one). topic is null for every other intent.
-TRANSFER  a person, a complaint, money.
+FAQ       a question, not a request to book. Then topic: PRICE (price, duration, what is offered, a discount or a cheaper option), AVAILABILITY (whether a day or time is free for an appointment), SALON (whether or when the salon is open, address, parking, policies, anything about the salon itself), HOWTO (how or where to book), GIFTCARD (buying, giving or using a gift card or voucher, or the balance on one). topic is null for every other intent.
+TRANSFER  they ask for a person, or have a complaint or a refund. Asking about a price or a discount is FAQ.
 OTHER     hello, thanks, goodbye, small talk, a joke. Swearing out of frustration is still OTHER or BOOK.
 UNSUPPORTED  a request or question that is none of the above — nothing to do with booking, the salon or what it offers (the weather, a taxi, a recipe, another business).
 OFFLIMITS insults at you or the salon, sexual or obscene content, asking you to say something rude or crude, or asking for other customers' or the salon's private information.`;
@@ -219,6 +227,8 @@ const EMPTY: Filled = {
   quantity: null,
   date: null,
   time: null,
+  times: [],
+  anyTime: false,
   firstName: null,
   lastName: null,
   phone: null,

@@ -155,10 +155,18 @@ const readDiary = async (session: CallSession, assumeOnePerson = false) => {
   }
 
   session.rejectedTime = null;
-  if (booking.time && !session.offered.slots.includes(booking.time)) {
-    session.rejectedTime = booking.time;
+  const slots = session.offered.slots;
+  const notFree: string[] = [];
+  if (booking.time && !slots.includes(booking.time)) {
+    notFree.push(booking.time);
     booking.time = null;
   }
+  // The further bookings are checked the same way, and the ones that are not
+  // free are dropped; the briefing says which, so the reply can offer others.
+  const kept = booking.moreTimes.filter((value) => slots.includes(value));
+  notFree.push(...booking.moreTimes.filter((value) => !slots.includes(value)));
+  booking.moreTimes = kept;
+  if (notFree.length > 0) session.rejectedTime = notFree.join(", ");
 };
 
 /**
@@ -211,7 +219,19 @@ export const absorb = async (
   if (filled.quantity && filled.quantity > 0) said.quantity = filled.quantity;
 
   if (filled.date && /^\d{4}-\d{2}-\d{2}$/.test(filled.date)) said.date = filled.date;
-  if (filled.time && /^\d{2}:\d{2}$/.test(filled.time)) said.time = filled.time;
+  /*
+   * Several times in one breath is a party coming one at a time: the first
+   * is the booking, the rest are further bookings of one person each. One
+   * time is just the time, and clears any earlier spread.
+   */
+  const times = [...new Set((filled.times ?? []).filter((value) => /^\d{2}:\d{2}$/.test(value)))];
+  if (times.length > 0) {
+    said.time = times[0];
+    said.moreTimes = times.slice(1);
+    if (times.length > 1) said.quantity = 1;
+  } else if (filled.time && /^\d{2}:\d{2}$/.test(filled.time)) {
+    said.time = filled.time;
+  }
   if (filled.firstName?.trim()) said.firstName = filled.firstName.trim();
   if (filled.lastName?.trim()) said.lastName = filled.lastName.trim();
 
@@ -227,6 +247,16 @@ export const absorb = async (
   // A question about a day is answered now, for one person, rather than
   // after the extras and head count a booking would collect first.
   await readDiary(session, intent === "FAQ");
+
+  /*
+   * "Any time, you pick" is an answer, not a dodge. Told to propose the
+   * earliest free time, the model asked "which time?" again instead; so the
+   * code takes the earliest the diary offered, and the read-back that
+   * follows is where they see it and say yes or change it.
+   */
+  if (filled.anyTime && !session.booking.time && session.offered?.slots.length) {
+    session.booking.time = session.offered.slots[0]!;
+  }
 };
 
 /**

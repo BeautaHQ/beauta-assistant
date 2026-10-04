@@ -95,6 +95,14 @@ export interface CallSession {
   transferring: boolean;
   /** Set once the booking is made, so a second attempt cannot go through. */
   bookingPublicId: string | null;
+  /** Every booking made on this conversation: a party spread over the day is several. */
+  bookingPublicIds: string[];
+  /**
+   * How many turns in a row the booking has sat on the same step with nothing
+   * new recorded. Three is the model asking the same question a third time,
+   * and the briefing then tells it to stop asking and say what it can take.
+   */
+  stuck: { key: string; turns: number };
   waitlisted: boolean;
   /**
    * How many days this turn has looked at. Reset per turn: a model left to
@@ -112,6 +120,8 @@ export interface CallSession {
   intentMs: number;
   /** How many turns this call has been abusive or obscene. Two on a call ends it. */
   offLimits: number;
+  /** Consecutive turns that were questions or small talk. The offer to book is made on the first, not on each. */
+  askStreak: number;
   transcript: TranscriptLine[];
 }
 
@@ -140,13 +150,35 @@ export const newSession = (
   lastIntent: null,
   transferring: false,
   bookingPublicId: null,
+  bookingPublicIds: [],
+  stuck: { key: "", turns: 0 },
   waitlisted: false,
   checksThisTurn: 0,
   toolsThisTurn: [],
   intentMs: 0,
   offLimits: 0,
+  askStreak: 0,
   transcript: [],
 });
+
+/**
+ * They have booked and want another: the next person, another day. The
+ * booking starts again with only what carries over — who they are and how to
+ * reach them — and the diary is read afresh for the new one.
+ */
+export const startAnotherBooking = (session: CallSession, options: { keepService: boolean }) => {
+  const { firstName, lastName, phone, email, serviceId, serviceName, addonIds, addonNames, quantity } = session.booking;
+  // "Another one on the 14th" means the same service unless they name a new
+  // one; a named service arrives in the same turn and takes the slot instead.
+  const same = options.keepService ? { serviceId, serviceName, addonIds, addonNames } : {};
+  session.booking = { ...emptyBooking(), firstName, lastName, phone, email, quantity, ...same };
+  session.offered = null;
+  session.reviewed = false;
+  session.rejectedAddons = [];
+  session.rejectedTime = null;
+  session.bookingPublicId = null;
+  session.stuck = { key: "", turns: 0 };
+};
 
 export const record = (
   session: CallSession,

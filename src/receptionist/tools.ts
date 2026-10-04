@@ -453,10 +453,13 @@ const dispatch = async (
             "Availability was checked for a different service. Check it again for this one.",
           );
         }
-        if (!offered.slots.includes(wanted.time!)) {
+        // One booking per start time: the first, and any further ones a party gave.
+        const startTimes = [wanted.time!, ...wanted.moreTimes];
+        const notOffered = startTimes.filter((value) => !offered.slots.includes(value));
+        if (notOffered.length > 0) {
           return refuse(
             "time_not_free",
-            `${wanted.time} is not free. Offer one of the times that are, or the waitlist.`,
+            `${notOffered.join(", ")} ${notOffered.length === 1 ? "is" : "are"} not free. Offer one of the times that are, or the waitlist.`,
             { available: offered.slots },
           );
         }
@@ -468,53 +471,77 @@ const dispatch = async (
          * not being able to reach the diary. Asking first turns that into a
          * sentence the caller can act on.
          */
-        const stillFree = await isSlotFree({
-          organizationId: session.salon.organizationId,
-          serviceId: wanted.serviceId!,
-          date: wanted.date!,
-          time: wanted.time!,
-          addonIds: wanted.addonIds,
-          quantity: wanted.quantity ?? 1,
-        });
-
-        if (!stillFree?.isAvailable) {
-          // The day has moved on, so throw away what we thought we knew.
-          session.offered = null;
-          return refuse(
-            "just_taken",
-            `${wanted.time} has gone since you offered it. Say so, check ${wanted.date} again, and offer what is left.`,
-          );
+        for (const startTime of startTimes) {
+          const stillFree = await isSlotFree({
+            organizationId: session.salon.organizationId,
+            serviceId: wanted.serviceId!,
+            date: wanted.date!,
+            time: startTime,
+            addonIds: wanted.addonIds,
+            quantity: wanted.quantity ?? 1,
+          });
+          if (!stillFree?.isAvailable) {
+            // The day has moved on, so throw away what we thought we knew.
+            session.offered = null;
+            return refuse(
+              "just_taken",
+              `${startTime} has gone since you offered it. Say so, check ${wanted.date} again, and offer what is left.`,
+            );
+          }
         }
 
-        const booking = await createBooking({
-          organizationId: session.salon.organizationId,
-          firstName: wanted.firstName!,
-          lastName: wanted.lastName!,
-          phone: wanted.phone!,
-          email: wanted.email,
-          serviceId: wanted.serviceId!,
-          addonIds: wanted.addonIds,
-          quantity: wanted.quantity ?? 1,
-          startTime: `${wanted.date} ${wanted.time}`,
-          /*
-           * No note. customerNotes is the customer's own field, shown to the
-           * salon as something they wrote — putting "booked with the AI
-           * receptionist" there puts words in their mouth and takes up the one
-           * place they had to say something real.
-           *
-           * Which channel took it is `source`, and the calendar already reads
-           * it out beside who scheduled the booking.
-           */
-          source: session.channel === "CHAT" ? "AI_CHAT" : "AI_CALL",
-        });
+        /*
+         * Made one after another, as the website would have made them. If one
+         * fails part-way, the ones before it stand, and the reply says which
+         * were made and which were not — a caller told "it's done" when one
+         * of three failed would turn up with a friend nobody is expecting.
+         */
+        const made: { time: string; reference: string }[] = [];
+        const failed: string[] = [];
+        for (const startTime of startTimes) {
+          try {
+            const booking = await createBooking({
+              organizationId: session.salon.organizationId,
+              firstName: wanted.firstName!,
+              lastName: wanted.lastName!,
+              phone: wanted.phone!,
+              email: wanted.email,
+              serviceId: wanted.serviceId!,
+              addonIds: wanted.addonIds,
+              quantity: wanted.quantity ?? 1,
+              startTime: `${wanted.date} ${startTime}`,
+              /*
+               * No note. customerNotes is the customer's own field, shown to the
+               * salon as something they wrote — putting "booked with the AI
+               * receptionist" there puts words in their mouth and takes up the one
+               * place they had to say something real.
+               *
+               * Which channel took it is `source`, and the calendar already reads
+               * it out beside who scheduled the booking.
+               */
+              source: session.channel === "CHAT" ? "AI_CHAT" : "AI_CALL",
+            });
+            if (booking?.bookingPublicId) made.push({ time: startTime, reference: booking.bookingPublicId });
+            else failed.push(startTime);
+          } catch {
+            failed.push(startTime);
+          }
+        }
+
+        if (made.length === 0) throw new Error("booking was not created");
 
         session.booking = wanted;
-        session.bookingPublicId = booking?.bookingPublicId ?? null;
+        session.bookingPublicId = made[0]!.reference;
+        session.bookingPublicIds.push(...made.map((item) => item.reference));
 
         return JSON.stringify({
           ok: true,
           booked: true,
           reference: session.bookingPublicId,
+          bookings: made,
+          ...(failed.length > 0
+            ? { notBooked: failed, note: "Tell them which times were booked and that the others were not; offer to try those again." }
+            : {}),
         });
       }
 

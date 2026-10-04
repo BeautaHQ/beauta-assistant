@@ -3,7 +3,7 @@ import OpenAI from "openai";
 import { missingFields } from "../call/booking";
 import { OPENAI_API_KEY, OPENAI_MODEL } from "../config";
 import { StreamingStringField } from "./jsonStream";
-import type { CallSession } from "../call/session";
+import { startAnotherBooking, type CallSession } from "../call/session";
 import { readTurn, type FaqTopic, type Intent } from "./intent";
 import { briefing, REPLY_FORMAT, systemPrompt } from "./prompt";
 import { absorb, currentStep, enforce, type Step } from "./steps";
@@ -42,6 +42,20 @@ const CHAT_CANNOT_MANAGE =
  */
 const unsupported = (salonName: string) =>
   `Sorry, that's not something I can help with. I can book an appointment at ${salonName}, or answer questions about our services, prices, hours and how to find us. What would you like?`;
+
+/**
+ * What is said when there is nobody to put them through to: on chat, or on a
+ * call to a salon with no number on file. The salon's own number when there
+ * is one, so the turn still ends with something they can do.
+ */
+const cannotTransfer = (session: CallSession) => {
+  const where = session.salon.phone
+    ? `You can reach the salon directly on ${session.salon.phone}`
+    : "You can reach the salon through the contact details on the booking page";
+  return session.channel === "CHAT"
+    ? `I can't put you through to someone over chat. ${where}. Is there anything else I can help with here?`
+    : `I'm not able to put you through right now. ${where}. Is there anything else I can help with?`;
+};
 
 const OFF_LIMITS_STRIKES = 2;
 const OFF_LIMITS = "That's not something I can help with. Shall we carry on with your booking?";
@@ -106,6 +120,18 @@ export const streamReply = async (
 
   const started = Date.now();
   const read = await readTurn(session, transcript, signal);
+
+  /*
+   * Booked, and booking again with something new — another day, another
+   * time, another service — is a second booking, not a slip. Without this
+   * every turn after a booking was answered with "it's done".
+   */
+  const newDetails =
+    read.filled.date || read.filled.time || read.filled.times.length > 0 || read.filled.serviceName || read.filled.serviceId;
+  if (session.bookingPublicId && read.intent === "BOOK" && newDetails) {
+    startAnotherBooking(session, { keepService: !read.filled.serviceName && !read.filled.serviceId });
+  }
+
   await absorb(session, read.filled, read.intent);
   session.intentMs = Date.now() - started;
 
@@ -116,6 +142,16 @@ export const streamReply = async (
       : null;
   const topic = intent === "FAQ" ? read.topic : null;
   session.lastIntent = intent;
+  session.askStreak = intent === "FAQ" || intent === "OTHER" ? session.askStreak + 1 : 0;
+
+  // The same step with the same booking, turn after turn, is a question being
+  // repeated. Counted here, read in the briefing.
+  // Only a booking turn moves the count; a "yes" or an aside in between does
+  // not reset it, or three repeats could never be seen.
+  if (intent === "BOOK" && step) {
+    const key = `${step}|${JSON.stringify(session.booking)}`;
+    session.stuck = session.stuck.key === key ? { key, turns: session.stuck.turns + 1 } : { key, turns: 1 };
+  }
 
   /*
    * A chat turn about changing a booking does not get to improvise. Chat
@@ -156,9 +192,25 @@ export const streamReply = async (
    * is carried out. The model announced the transfer and called nothing, so
    * the socket closed with "done" and Twilio hung up on a caller who had just
    * been told to hold. The intent is enough.
+   *
+   * And where there is no line to put them through on — a chat, or a salon
+   * with no number on file — the model must not say it at all. On chat it
+   * announced a transfer, then explained a chat cannot be transferred. The
+   * reply is fixed here instead, with the number they can ring.
    */
-  if (session.channel === "PHONE" && intent === "TRANSFER" && session.salon.staffPhone) {
-    session.transferring = true;
+  if (intent === "TRANSFER") {
+    if (session.channel === "PHONE" && session.salon.staffPhone) {
+      session.transferring = true;
+    } else {
+      return {
+        say: cannotTransfer(session),
+        intent,
+        step,
+        topic,
+        endCall: false,
+        brokePromise: false,
+      };
+    }
   }
 
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
