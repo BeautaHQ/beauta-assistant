@@ -68,8 +68,20 @@ export const conversationRelayRouter = (app: FastifyInstance) => {
      */
     let inFlight: AbortController | null = null;
 
+    // Logged once per reply: a socket that shut mid-answer would otherwise
+    // swallow the words and still be reported as "Answered".
+    let dropped = false;
     const say = (token: string, last: boolean) => {
-      if (socket.readyState !== socket.OPEN) return;
+      if (socket.readyState !== socket.OPEN) {
+        if (!dropped) {
+          dropped = true;
+          request.log.warn(
+            { event: "reply_dropped", callSid, readyState: socket.readyState },
+            "Socket not open; reply not delivered",
+          );
+        }
+        return;
+      }
       socket.send(JSON.stringify({ type: "text", token, last }));
     };
 
@@ -77,21 +89,28 @@ export const conversationRelayRouter = (app: FastifyInstance) => {
       inFlight?.abort();
       const controller = new AbortController();
       inFlight = controller;
+      dropped = false;
 
       await ready;
 
       history.push({ role: "user", content: prompt });
       record(session, "caller", prompt);
 
+      // How much of the answer was streamed. A reply fixed in code streams
+      // nothing, and so would one the parser missed; both must still be said.
+      let streamed = 0;
       try {
         // Tokens go out as they arrive, so Twilio starts speaking immediately.
         const reply = await streamReply(
           session,
           history,
-          (token) => say(token, false),
+          (token) => {
+            streamed += token.length;
+            say(token, false);
+          },
           controller.signal,
         );
-        say("", true);
+        say(streamed === 0 ? reply.say : "", true);
         history.push({ role: "assistant", content: reply.say });
         record(session, "salon", reply.say, {
           intent: reply.intent,
@@ -108,6 +127,7 @@ export const conversationRelayRouter = (app: FastifyInstance) => {
             step: reply.step,
             brokePromise: reply.brokePromise,
             reply: reply.say,
+            streamed,
           },
           "Answered",
         );

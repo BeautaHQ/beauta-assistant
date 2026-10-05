@@ -29,7 +29,10 @@ export class StreamingStringField {
     key: string,
     private readonly emit: (text: string) => void,
   ) {
-    this.opening = new RegExp(`"${key}"\s*:\s*"`);
+    // Double backslashes: in a template literal a lone \s is just "s", and the
+    // pattern then only matched "say":" written with no spaces. The model
+    // sometimes writes "say": " — and those replies streamed nothing.
+    this.opening = new RegExp(`"${key}"\\s*:\\s*"`);
   }
 
   /** Everything of the field seen so far, unescaped. */
