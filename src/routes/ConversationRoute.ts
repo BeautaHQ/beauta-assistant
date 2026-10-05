@@ -27,7 +27,13 @@ import { salonById, salonForCall } from "../salon/lookup";
  */
 
 /** Calls in progress, by their id. Same lifetime as a socket on the real route. */
-const calls = new Map<string, { session: CallSession; history: Turn[]; at: number }>();
+/*
+ * `opened` is whether the conversation row exists yet. It is written on the
+ * first message, not on start: opening the chat widget and closing it again
+ * without typing is not a conversation, and used to leave an empty row behind
+ * that the salon saw as "nothing to say".
+ */
+const calls = new Map<string, { session: CallSession; history: Turn[]; at: number; opened: boolean }>();
 
 /*
  * A simulated call has no socket to close, so nothing tells us the tester
@@ -41,7 +47,7 @@ const sweep = () => {
     if (call.at >= cutoff) continue;
     // Walking away is how a chat ends. Closed like a hang-up, so the row gets
     // its end time and outcome instead of sitting open forever.
-    void closeCall(call.session).catch(() => {});
+    if (call.opened) void closeCall(call.session).catch(() => {});
     calls.delete(id);
   }
 };
@@ -147,8 +153,7 @@ export const conversationRouter = (app: FastifyInstance) => {
       session.forwardedFrom = request.body?.forwardedFrom ?? null;
       session.catalogue = await getCatalogue(salon.organizationId).catch(() => null);
 
-      await openCall(session);
-      calls.set(conversationId, { session, history: [], at: Date.now() });
+      calls.set(conversationId, { session, history: [], at: Date.now(), opened: false });
 
       return reply.send({
         conversationId,
@@ -229,6 +234,10 @@ export const conversationRouter = (app: FastifyInstance) => {
 
       call.at = Date.now();
       const { session, history } = call;
+      if (!call.opened) {
+        await openCall(session);
+        call.opened = true;
+      }
 
       history.push({ role: "user", content: request.body.text });
       record(session, "caller", request.body.text);
@@ -360,7 +369,7 @@ export const conversationRouter = (app: FastifyInstance) => {
         return reply.status(404).send({ success: false, message: "No such call." });
       }
 
-      await closeCall(call.session);
+      if (call.opened) await closeCall(call.session);
       calls.delete(request.params.conversationId);
 
       return reply.send({
