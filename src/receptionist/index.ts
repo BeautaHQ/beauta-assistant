@@ -22,10 +22,10 @@ const client = new OpenAI({ apiKey: OPENAI_API_KEY });
  * channel can prove, not about what sounds reasonable, so it should read the
  * same every time and never be talked around.
  */
-const CHAT_CANNOT_MANAGE =
-  "I can't change or cancel a booking over chat — we can only do that over the phone, " +
-  "where we can see the number you're calling from. Please ring the salon, or use the link " +
-  "in your confirmation email. Is there anything else I can help you with?";
+const chatCannotManage = (session: CallSession) =>
+  `Sorry, I can't change bookings over chat. Please use the link in your confirmation email${
+    session.salon.phone ? ` or call us on ${session.salon.phone}` : " or call the salon"
+  }.`;
 
 /**
  * What is said to abuse, and how many times before the call ends.
@@ -42,7 +42,7 @@ const CHAT_CANNOT_MANAGE =
  * it does do and hands the turn back.
  */
 const unsupported = (salonName: string) =>
-  `Sorry, that's not something I can help with. I can book an appointment at ${salonName}, or answer questions about our services, prices, hours and how to find us. What would you like?`;
+  `Sorry, I can't help with that. I can book you in at ${salonName} or answer questions about the salon.`;
 
 /**
  * What is said when there is nobody to put them through to: on chat, or on a
@@ -54,8 +54,8 @@ const cannotTransfer = (session: CallSession) => {
     ? `You can reach the salon directly on ${session.salon.phone}`
     : "You can reach the salon through the contact details on the booking page";
   return session.channel === "CHAT"
-    ? `I can't put you through to someone over chat. ${where}. Is there anything else I can help with here?`
-    : `I'm not able to put you through right now. ${where}. Is there anything else I can help with?`;
+    ? `I can't put you through over chat. ${where}.`
+    : `I can't put you through right now. ${where}.`;
 };
 
 const OFF_LIMITS_STRIKES = 2;
@@ -182,7 +182,7 @@ export const streamReply = async (
    * is written, the reply is never written.
    */
   if (session.channel === "CHAT" && intent === "MANAGE") {
-    return { say: CHAT_CANNOT_MANAGE, intent, step, topic, endCall: false, brokePromise: false };
+    return { say: chatCannotManage(session), intent, step, topic, endCall: false, brokePromise: false };
   }
 
   if (intent === "UNSUPPORTED") {
