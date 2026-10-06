@@ -122,6 +122,10 @@ export interface CallSession {
   offLimits: number;
   /** Consecutive turns that were questions or small talk. The offer to book is made on the first, not on each. */
   askStreak: number;
+  /** They have asked to book at some point; a question after that carries the booking on. */
+  wantsToBook: boolean;
+  /** The extras for the chosen service have been offered once; not again. */
+  extrasOffered: number | null;
   transcript: TranscriptLine[];
 }
 
@@ -158,6 +162,8 @@ export const newSession = (
   intentMs: 0,
   offLimits: 0,
   askStreak: 0,
+  wantsToBook: false,
+  extrasOffered: null,
   transcript: [],
 });
 

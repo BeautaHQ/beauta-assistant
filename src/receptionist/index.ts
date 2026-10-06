@@ -1,3 +1,4 @@
+import { resolveSpokenDate, resolveSpokenTime } from "../salon/spokenDate";
 import OpenAI from "openai";
 
 import { missingFields } from "../call/booking";
@@ -121,6 +122,26 @@ export const streamReply = async (
   const started = Date.now();
   const read = await readTurn(session, transcript, signal);
 
+  // The day is worked out in code from the customer's own words, not left to
+  // the model: "Friday" is this Friday, "9/10" is 9 October. When they name a
+  // day, it overrides whatever the model made of it.
+  const lastSaid = [...history].reverse().find((turn) => turn.role === "user")?.content;
+  const spoken = typeof lastSaid === "string" ? resolveSpokenDate(lastSaid, session.salon.timezone) : null;
+  if (spoken) read.filled.date = spoken;
+  // An exact clock time, when the model missed it. Ranges ("after 5pm") are left to the model.
+  const spokenTime = typeof lastSaid === "string" ? resolveSpokenTime(lastSaid) : null;
+  if (spokenTime && !read.filled.time && read.filled.times.length === 0) read.filled.time = spokenTime;
+
+  // A phone number or email in anything they say is kept for the booking,
+  // whatever the turn was about; the model only sometimes picked them out.
+  if (typeof lastSaid === "string") {
+    const email = /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/.exec(lastSaid)?.[0];
+    if (email && !read.filled.email) read.filled.email = email;
+    const phone = /(?<![\d/.:])\+?\d[\d\s-]{6,16}\d(?![\d/.:])/.exec(lastSaid)?.[0];
+    const digits = phone?.replace(/\D/g, "") ?? "";
+    if (phone && digits.length >= 8 && digits.length <= 15 && !read.filled.phone) read.filled.phone = phone.replace(/[\s-]/g, "");
+  }
+
   /*
    * Booked, and booking again with something new — another day, another
    * time, another service — is a second booking, not a slip. Without this
@@ -142,6 +163,7 @@ export const streamReply = async (
       : null;
   const topic = intent === "FAQ" ? read.topic : null;
   session.lastIntent = intent;
+  if (intent === "BOOK") session.wantsToBook = true;
   session.askStreak = intent === "FAQ" || intent === "OTHER" ? session.askStreak + 1 : 0;
 
   // The same step with the same booking, turn after turn, is a question being
@@ -218,6 +240,8 @@ export const streamReply = async (
     ...transcript,
     { role: "system", content: briefing(session, intent) },
   ];
+  // This reply is the one that offers the extras; later briefings say they were.
+  if (session.booking.serviceId && step && step !== "REVIEW" && step !== "BOOK") session.extrasOffered = session.booking.serviceId;
   const tools = toolsFor(intent, step, session, topic);
 
   for (let round = 0; round < 4; round += 1) {

@@ -257,7 +257,7 @@ export const toolsFor = (
   // booking needs a tool to look at it. The one tool left is the one that
   // books — and the waitlist, for a day the diary came back empty for.
   if (step === "BOOK") return pick("create_booking");
-  if (step === "TIME" && session.offered?.slots.length === 0) return pick("join_waitlist");
+  if (step && step !== "REVIEW" && session.offered?.slots.length === 0) return pick("join_waitlist");
 
   // A question about a gift card may come with a code; the balance is read, not guessed.
   if (intent === "FAQ" && topic === "GIFTCARD") return pick("check_gift_card");

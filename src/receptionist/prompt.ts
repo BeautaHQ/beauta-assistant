@@ -41,31 +41,34 @@ A phone call, spoken aloud, no scrolling back. Times the way people say them —
  */
 const roadmap = (channel: CallSession["channel"]) =>
   channel === "CHAT"
-    ? "1 service · 2 extras and how many people · 3 day · 4 time · 5 name · 6 number · 7 read it all back · 8 book, only after their yes."
-    : "1 service · 2 extras and how many people · 3 day · 4 time · 5 name · 6 read it all back · 7 book, only after their yes.";
+    ? "service (extras optional) · day · time · full name · phone number · read it all back · book, only after their yes. One person unless they say more."
+    : "service (extras optional) · day · time · full name · read it all back · book, only after their yes. One person unless they say more.";
 
 /**
- * What one step of a booking asks for. One block per step, nothing about the
- * others. Written as the move to make, not as a rule to obey.
+ * Collecting the details is one move, not a walk through steps: say what is
+ * already taken down, show the free times if there are some, and ask for
+ * everything still missing in one message. Read-back and booking stay their
+ * own turns, because a booking is only made after the customer has seen it
+ * all and said yes.
  */
+const COLLECT = `THIS TURN
+They want to book. Keep it short and on point: at most two short sentences, one question.
+Do not repeat back what you already have — it is taken down. Only say the booking back if they ask what you have, or at the read-back.
+If the briefing has free times for the day, give two or three concrete times to pick from ("5:00 or 5:30 PM?"), or the open range if it is wide. If the time they asked for is not free, say so in a few words and give the nearest. If they asked for part of the day ("after 5pm") and nothing there is free, say so and offer the nearest that day or another day. Day full: offer the waitlist or another day.
+Then ask for what is STILL MISSING, as one natural question. If the service could be two on the list, offer the two. Mention extras at most once.
+Never ask for a name, phone number or email until the service, day and time are settled.
+If they leave the time to you, propose the earliest free time and ask them to confirm it.
+If they say they have no phone number, say a booking needs one to be confirmed and ask for any number they can be reached on; an email alone is not enough.`;
+
 const STEP: Record<Step, string> = {
-  SERVICE: `THIS TURN
-Settle the service. If what they said could be two on the list, offer the two; otherwise suggest the one that fits.`,
-
-  ADDONS: `THIS TURN
-Say the service you have taken down first — its name and price — so they can correct you. Then name two or three of its extras (in the briefing) with prices, and ask how many people it is for. One question.`,
-
-  DAY: `THIS TURN
-Ask which day suits them.`,
-
-  TIME: `THIS TURN
-Say the day with its date the first time ("Saturday the 17th"). Every free time for the day is in the briefing. Read it and tell them what the day looks like — where it is open, where it is taken — then ask what time suits. If the time they asked for was not free, say so and say what is near it. A run of free times may be said as a range; a gap must not be. If they leave the time to you, propose the earliest free time and ask them to confirm it. Day full: offer the waitlist or another day.`,
-
-  INFO: `THIS TURN
-Ask for the first thing STILL MISSING in the briefing, and only that. If they say they have no phone number, say a booking needs one to be confirmed and ask for any number they can be reached on; an email alone is not enough.`,
+  SERVICE: COLLECT,
+  ADDONS: COLLECT,
+  DAY: COLLECT,
+  TIME: COLLECT,
+  INFO: COLLECT,
 
   REVIEW: `THIS TURN
-Read the booking back exactly as the briefing has it — service, extras, people, day, time, name; nothing from the conversation that is not there — and ask them to confirm. "I have you down for", never "booked". Several times means several bookings of one person: read each time out. Set readBack true.`,
+Read the booking back exactly as the briefing has it — service, extras, people, day, time, name; nothing from the conversation that is not there — and ask them to confirm, in the language they are writing in. Say it as "I have you down for" (or the same in their language), never "booked". Several times means several bookings of one person: read each time out. Set readBack true.`,
 
   BOOK: `THIS TURN
 They said yes. Call create_booking now. Then say it is done and say goodbye.`,
@@ -108,7 +111,7 @@ const FAQ_TURN: Record<FaqTopic, string> = {
 Recommend, don't read the menu: start from what they want, then the service, its price and what matters to them; a second option only if it adds something. What a service is, or which suits them: from its description, SALON INFO and general nail-trade knowledge. This salon's prices, inclusions, deals and policies: only from the list and SALON INFO. A discount: you cannot change or promise a price — say so once, offer the cheaper services. Several questions: one short line each. Then stop.`,
 
   AVAILABILITY: `THIS TURN
-The briefing's diary line is the answer: say what is free that day, naming the service it is for, or that the time they asked for is not and what is near it. If the service is not settled, ask which service first and nothing else. Then stop — no extras, no head count until they say yes.`,
+The briefing's diary line is the answer: say what is free that day, naming the service it is for, or that the time they asked for is not and what is near it. If the service is not settled, ask which service. If they are in the middle of booking, carry on with what the briefing says is still missing.`,
 
   SALON: `THIS TURN
 Answer only from SALON INFO. Never guess an address, an hour or a policy.`,
@@ -161,7 +164,7 @@ export const systemPrompt = (
 
   const catalogue = session.catalogue;
   let list = "";
-  if (step === "SERVICE") list = `\n${catalogue?.servicesText ?? ""}\n`;
+  if (step && step !== "REVIEW" && step !== "BOOK" && !session.booking.serviceId) list = `\n${catalogue?.servicesText ?? ""}\n`;
   else if (intent === "FAQ") {
     /*
      * Every question sees what the salon wrote about itself, whatever the
@@ -191,14 +194,15 @@ ${todayName} ${today}. Tomorrow is ${tomorrowName} ${tomorrow}. Timezone ${sessi
 ${timeStyle(session.channel)}
 
 HOW TO SPEAK
-One or two short sentences, then stop. Only facts from the briefing, the price list or a tool. Do things, never announce them. Never read a reference out. Never ask for anything the briefing already has.
+One or two short sentences, then stop — clear, on point, nothing extra. Dates and times in the customer's own language.
+Nothing is booked until create_booking has run: before that, never say "booked", "you're booked" or "confirmed" — say what you have down. Only facts from the briefing, the price list or a tool. Do things, never announce them. Never read a reference out. Never ask for anything the briefing already has.
 If the briefing says DROPPED or NOT FREE, say that first.
 Not in what you have: say it as yourself — "I'm sorry, I don't have that information" — never "not described" or "not provided"; then give the salon's phone from SALON INFO to ask.
 Vague or unsure ("just my nails", "I don't know what I have"): never answer vague with vague. Narrow it yourself with one concrete either-or question drawn from what you know of the trade, and suggest.
 Asked what you are: one line — the salon's virtual receptionist, here to check times, book, and answer questions about the salon. Nothing about how you work.
 Price-list numbers are for you only; call services by name. Never name staff — bookings are with whoever is free.
 
-THE ROADMAP — in this order; the briefing says where you are.
+WHAT A BOOKING NEEDS — ask for what is missing together, in any order; the briefing says what is missing.
 ${roadmap(session.channel)}
 ${list}
 ${turn}
@@ -239,9 +243,8 @@ export const REPLY_FORMAT = {
 /** What to do about a gap, one line each. */
 const NEXT_STEP: Record<string, string> = {
   service: "ask which, offering the choice if two fit",
-  "extras and how many people": "offer the extras above with prices and ask how many people",
-  date: "ask which day",
-  time: "describe the free times above and ask what suits",
+  date: "which day suits them",
+  time: "what time suits, from the free times above if there are some",
   "full name": "first and last name",
   "phone number": "",
   confirmation: "read it all back and ask them to confirm; set readBack true",
@@ -266,8 +269,8 @@ const diaryLine = (session: CallSession): string => {
   // Times on hand for this day, fetched for a question before the head count
   // was known, are still the answer to that question.
   const onHand = offered !== null && offered.date === booking.date && offered.serviceId === booking.serviceId;
-  if (!onHand && (!booking.serviceId || booking.quantity === null || !booking.date)) {
-    return "diary: not asked yet — the service and extras come first";
+  if (!onHand && (!booking.serviceId || !booking.date)) {
+    return "diary: not asked yet — needs the service and the day";
   }
   if (!offered) return "diary: could not be reached — say so and offer to take a message";
   if (offered.slots.length === 0) return `diary: ${offered.date} is full — offer the waitlist or another day`;
@@ -321,8 +324,8 @@ Booked already, reference ${session.bookingPublicId}. Done — never book again.
   const lines = [
     "BOOKING SO FAR",
     `service: ${service ? `${service.name} $${service.price}, ${service.durationMinutes} min` : "not settled"}`,
-    `extras: ${booking.addonNames.length > 0 ? booking.addonNames.join(", ") : booking.quantity === null ? "not asked yet" : "none"}`,
-    `people: ${booking.quantity ?? "not asked yet"}`,
+    `extras: ${booking.addonNames.length > 0 ? booking.addonNames.join(", ") : "none chosen"}`,
+    `people: ${booking.quantity ?? "1 (unless they say otherwise)"}`,
     `day: ${booking.date ?? "not settled"} · time: ${booking.time ?? "not settled"}${
       booking.moreTimes.length > 0 ? ` — and ${booking.moreTimes.join(", ")}: one booking per time, one person each` : ""
     }`,
@@ -336,7 +339,9 @@ Booked already, reference ${session.bookingPublicId}. Done — never book again.
     lines.push(
       extrasOnOffer.length === 0
         ? "extras for this service: none"
-        : `extras for this service: ${extrasOnOffer.map((a) => `${a.name} $${a.price}`).join("; ")}`,
+        : `extras for this service (the only ones there are — anything else is not offered): ${extrasOnOffer.map((a) => `${a.name} $${a.price}`).join("; ")}${
+            session.extrasOffered === booking.serviceId && booking.addonIds.length === 0 ? " — already offered once; do not list them again unless they ask" : ""
+          }`,
     );
   }
   if (session.rejectedAddons.length > 0) {
@@ -368,7 +373,25 @@ Booked already, reference ${session.bookingPublicId}. Done — never book again.
    * head count, as the list said to. On a question the list stays out; the
    * topic's own instructions say what to do after the answer.
    */
+  /*
+   * Asked for together, not one per turn; the read-back comes once the rest
+   * is in. The appointment first, then who it is for: asking for a name and
+   * number on every turn while they are still choosing a time reads as nagging.
+   */
+  const open = gaps.filter((gap) => gap !== "confirmation");
+  const appointment = open.filter((gap) => gap === "service" || gap === "date" || gap === "time");
+  const toAsk = appointment.length > 0 ? appointment : open;
+  const askLine = (lead: string) => [lead, ...toAsk.map((gap) => `- ${gap}: ${step(gap, session)}`)];
+  // Asking a price names a service, but is not a booking; only asking to book is.
+  const bookingInProgress = session.wantsToBook;
+
   if (intent === "FAQ" || intent === "OTHER") {
+    // A question in the middle of booking is answered, then the booking
+    // carries on; it used to stop dead and start again with "which day?".
+    if (bookingInProgress && toAsk.length > 0) {
+      lines.push(...askLine("They asked something in the middle of booking. Answer it briefly, then carry on with one short question about the first thing still missing —"));
+      return lines.join("\n");
+    }
     /*
      * One offer to book per run of questions, not one per question. Four
      * questions in a row got "would you like to book?" four times, which
@@ -386,10 +409,9 @@ Booked already, reference ${session.bookingPublicId}. Done — never book again.
   } else if (session.reviewed && gaps.length === 1 && gaps[0] === "confirmation") {
     lines.push("Read back already; only their yes is missing. Do not read it back again.");
   } else {
-    lines.push(
-      "STILL MISSING, in order — ask for the first:",
-      ...gaps.map((gap, index) => `${index + 1}. ${gap}: ${step(gap, session)}`),
-    );
+    lines.push(...(toAsk.length > 0
+      ? askLine("STILL MISSING — ask for it in one short natural question (it may cover more than one of these):")
+      : ["Everything is in. Read it all back and ask them to confirm; set readBack true."]));
   }
 
   return lines.join("\n");

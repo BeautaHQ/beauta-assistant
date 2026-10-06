@@ -173,11 +173,16 @@ export const mergeBooking = (
   };
 };
 
-/** What is still needed, in the order it should be asked for. */
+/**
+ * What is still needed before a booking can be made.
+ *
+ * Not a script to walk through: the reply asks for whatever of this is
+ * missing in one go. The head count is not on it — a booking is for one
+ * person unless they say otherwise, and the read-back is where they see it.
+ */
 export const missingFields = (booking: BookingState): string[] => {
   const gaps: string[] = [];
   if (!booking.serviceId) gaps.push("service");
-  if (booking.quantity === null) gaps.push("extras and how many people");
   if (!booking.date) gaps.push("date");
   if (!booking.time) gaps.push("time");
   if (!booking.firstName?.trim() || !booking.lastName?.trim()) gaps.push("full name");

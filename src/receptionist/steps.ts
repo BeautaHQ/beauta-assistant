@@ -123,13 +123,10 @@ const offerKey = (booking: BookingState) =>
  * checked against them — and dropped if it is not one of them, with the list
  * kept so the reply can offer the nearest.
  */
-const readDiary = async (session: CallSession, assumeOnePerson = false) => {
+const readDiary = async (session: CallSession) => {
   const booking = session.booking;
+  // A service and a day are enough to look. One person unless they said more.
   if (!booking.serviceId || !booking.date) return;
-  // A booking waits for the head count, because it changes the answer. A
-  // question does not: "is there anything today?" is answered for one person
-  // and the count is asked for only if they go on to book.
-  if (booking.quantity === null && !assumeOnePerson) return;
 
   const key = offerKey(booking);
   if (session.offered?.key !== key) {
@@ -244,9 +241,10 @@ export const absorb = async (
   session.booking = mergeBooking(session.booking, said);
   pruneStrayAddons(session);
   session.rejectedAddons.push(...addons.unknown);
-  // A question about a day is answered now, for one person, rather than
-  // after the extras and head count a booking would collect first.
-  await readDiary(session, intent === "FAQ");
+  // Looked up as soon as there is a service and a day, whatever kind of turn
+  // this was: a question about Friday deserves Friday's times.
+  void intent;
+  await readDiary(session);
 
   /*
    * "Any time, you pick" is an answer, not a dodge. Told to propose the
@@ -267,8 +265,6 @@ export const currentStep = (session: CallSession, intent: Intent): Step => {
   switch (first) {
     case "service":
       return "SERVICE";
-    case "extras and how many people":
-      return "ADDONS";
     case "date":
       return "DAY";
     case "time":
