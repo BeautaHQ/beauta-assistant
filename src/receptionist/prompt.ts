@@ -69,7 +69,7 @@ const STEP: Record<Step, string> = {
   INFO: COLLECT,
 
   REVIEW: `THIS TURN
-Read the booking back exactly as the briefing has it — service, extras, people, each other person's service, day, time, name; nothing from the conversation that is not there — and ask them to confirm, in the language they are writing in. Say it as "I have you down for" (or the same in their language), never "booked". Several times means several bookings of one person: read each time out. Set readBack true.`,
+Read the booking back exactly as the briefing has it — service, extras, people, each other person's service and their time if it differs, day, time, name; nothing from the conversation that is not there — and ask them to confirm, in the language they are writing in. Say it as "I have you down for" (or the same in their language), never "booked". Several times means several bookings of one person: read each time out. Set readBack true.`,
 
   BOOK: `THIS TURN
 They said yes. Call create_booking now. Then say it is done and say goodbye.`,
@@ -331,7 +331,7 @@ Booked already, reference ${session.bookingPublicId}. Done — never book again.
     `service: ${service ? `${service.name} $${service.price}, ${service.durationMinutes} min` : "not settled"}`,
     `extras: ${booking.addonNames.length > 0 ? booking.addonNames.join(", ") : "none chosen"}`,
     `people: ${booking.quantity ?? "1 (unless they say otherwise)"}${booking.others.length > 0 ? " for that service" : ""}`,
-    ...booking.others.map((person, index) => `also, person ${index + 2}: ${person.serviceName}${person.addonNames.length > 0 ? ` with ${person.addonNames.join(", ")}` : ""} — their own booking, same day and time`),
+    ...booking.others.map((person, index) => `also, person ${index + 2}: ${person.serviceName}${person.addonNames.length > 0 ? ` with ${person.addonNames.join(", ")}` : ""} — their own booking, same day, ${person.time ? `at ${person.time}` : "same time as person 1"}`),
     `day: ${booking.date ?? "not settled"} · time: ${booking.time ?? "not settled"}${
       booking.moreTimes.length > 0 ? ` — and ${booking.moreTimes.join(", ")}: one booking per time, one person each` : ""
     }`,
@@ -350,8 +350,11 @@ Booked already, reference ${session.bookingPublicId}. Done — never book again.
           }`,
     );
   }
+  if (session.differentDays) {
+    lines.push("ONE DAY ONLY: they want people on different days. A booking here is one day for everyone (times may differ that day). Say so in one short line and ask which one day suits everyone — or book one person now and the other separately afterwards.");
+  }
   if (session.unclearParty) {
-    lines.push(`UNCLEAR WHO HAS WHAT: ${session.unclearParty} — ask that first, in one short question, and propose nothing else. Each person has one service and any of its extras.`);
+    lines.push(`UNCLEAR WHO HAS WHAT: ${session.unclearParty} — answer what they just said first, then ask this in one short question. Each person has one service and any of its extras.`);
   }
   for (const [index, person] of booking.others.entries()) {
     const theirs = session.catalogue?.addonsByService.get(person.serviceId) ?? [];
@@ -366,10 +369,13 @@ Booked already, reference ${session.bookingPublicId}. Done — never book again.
   lines.push(diaryLine(session));
   // When the whole party is done, from the service lengths; "need to be done by 5:30" is answered from this.
   if (booking.time && booking.serviceId) {
-    const lengths = [booking.serviceId, ...booking.others.map((person) => person.serviceId)]
-      .map((id) => session.catalogue?.serviceById.get(id)?.durationMinutes ?? 0);
-    const [hour, minute] = booking.time.split(":").map(Number);
-    const end = hour! * 60 + minute! + Math.max(...lengths);
+    // Each person from their own start time; the party is done when the last one is.
+    const minutes = (time: string) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
+    const ends = [
+      { start: booking.time, serviceId: booking.serviceId },
+      ...booking.others.map((person) => ({ start: person.time ?? booking.time!, serviceId: person.serviceId })),
+    ].map((part) => minutes(part.start) + (session.catalogue?.serviceById.get(part.serviceId)?.durationMinutes ?? 0));
+    const end = Math.max(...ends);
     lines.push(`finishes about ${String(Math.floor(end / 60)).padStart(2, "0")}:${String(end % 60).padStart(2, "0")} (side by side; extras add a little)`);
   }
   if (session.rejectedTime) {

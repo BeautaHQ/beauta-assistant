@@ -141,6 +141,7 @@ const resolveOthers = (session: CallSession, said: Filled["others"]): PartyMembe
     members.push({
       serviceId, serviceName: catalogue.serviceById.get(serviceId)?.name ?? person.serviceName ?? "",
       addonIds, addonNames: addonIds.map((id) => catalogue.addonNameById.get(id) ?? `extra ${id}`),
+      time: person.time && /^\d{2}:\d{2}$/.test(person.time) ? person.time : null,
     });
   }
   return members;
@@ -149,7 +150,7 @@ const resolveOthers = (session: CallSession, said: Filled["others"]): PartyMembe
 /** What the times on hand were fetched for. A different appointment needs a fresh look. */
 const offerKey = (booking: BookingState) =>
   `${booking.serviceId}|${booking.date}|${[...booking.addonIds].sort().join(",")}|${booking.quantity}|${
-    booking.others.map((person) => `${person.serviceId}+${[...person.addonIds].sort().join(",")}`).join(";")}`;
+    booking.others.map((person) => `${person.serviceId}+${[...person.addonIds].sort().join(",")}@${person.time ?? ""}`).join(";")}`;
 
 /**
  * Ask the diary, once the booking is settled enough to ask it about.
@@ -163,18 +164,40 @@ const offerKey = (booking: BookingState) =>
  */
 const addDays = (date: string, days: number) => new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
 
-/** Up to three of the next seven days after a full one that have free times for this booking. */
-const nextFreeDays = async (session: CallSession, after: string) => {
+/**
+ * The start times on one day when the WHOLE party can start: everyone asked
+ * at once, in parallel, and only the times free for all of them kept. The one
+ * place free times come from, so what is offered as "another day" and what is
+ * checked once they pick it can never disagree.
+ *
+ * Each person is asked about on their own, so two of them needing the same
+ * staff member is only caught when the bookings are made, one after another.
+ */
+const partySlots = async (session: CallSession, date: string): Promise<string[]> => {
   const booking = session.booking;
-  const found: { date: string; slots: string[] }[] = [];
+  // Only the people starting together share a time; anyone with their own time is checked on their own.
+  const asks = [
+    { serviceId: booking.serviceId!, addonIds: booking.addonIds, quantity: booking.quantity ?? 1 },
+    ...booking.others.filter((person) => person.time === null).map((person) => ({ serviceId: person.serviceId, addonIds: person.addonIds, quantity: 1 })),
+  ];
+  const results = await Promise.all(asks.map((ask) => checkAvailability({
+    organizationId: session.salon.organizationId, date, ...ask,
+  })));
+  const [first, ...rest] = results.map((result) => result.availableSlots);
+  return rest.reduce((kept, slots) => {
+    const free = new Set(slots);
+    return kept.filter((slot) => free.has(slot));
+  }, first ?? []);
+};
+
+/** Up to three of the next seven days after a full one when the whole party has free times. */
+const nextFreeDays = async (session: CallSession, after: string) => {
   const days = Array.from({ length: 7 }, (_, index) => addDays(after, index + 1));
-  const results = await Promise.all(days.map((date) => checkAvailability({
-    organizationId: session.salon.organizationId, serviceId: booking.serviceId!, date, addonIds: booking.addonIds, quantity: booking.quantity ?? 1,
-  }).catch(() => null)));
-  results.forEach((result, index) => {
-    if (result && result.availableSlots.length > 0 && found.length < 3) found.push({ date: days[index]!, slots: result.availableSlots });
-  });
-  return found;
+  const results = await Promise.all(days.map((date) => partySlots(session, date).catch(() => [] as string[])));
+  return days
+    .map((date, index) => ({ date, slots: results[index]! }))
+    .filter((day) => day.slots.length > 0)
+    .slice(0, 3);
 };
 
 const readDiary = async (session: CallSession) => {
@@ -186,30 +209,10 @@ const readDiary = async (session: CallSession) => {
   const fresh = session.offered?.key !== key;
   if (fresh) {
     try {
-      const result = await checkAvailability({
-        organizationId: session.salon.organizationId,
-        serviceId: booking.serviceId,
-        date: booking.date,
-        addonIds: booking.addonIds,
-        quantity: booking.quantity ?? 1,
-      });
-      /*
-       * A party with different services can only start when every one of
-       * them has a free start then. Each is asked on its own; two of them
-       * wanting the same staff member is caught when the bookings are made,
-       * one after another, and the second is checked against the first.
-       */
-      let slots = result.availableSlots;
-      for (const person of booking.others) {
-        const theirs = await checkAvailability({
-          organizationId: session.salon.organizationId, serviceId: person.serviceId, date: booking.date, addonIds: person.addonIds, quantity: 1,
-        });
-        const free = new Set(theirs.availableSlots);
-        slots = slots.filter((slot) => free.has(slot));
-      }
+      const slots = await partySlots(session, booking.date);
       session.offered = {
         serviceId: booking.serviceId,
-        date: result.date,
+        date: booking.date,
         slots,
         key,
       };
@@ -247,8 +250,29 @@ const readDiary = async (session: CallSession) => {
   const kept = booking.moreTimes.filter((value) => slots.includes(value));
   notFree.push(...booking.moreTimes.filter((value) => !slots.includes(value)));
   booking.moreTimes = kept;
+
+  // Anyone in the party with their own time that day: is that time free for their service?
+  for (const person of booking.others) {
+    if (!person.time) continue;
+    try {
+      const theirs = await checkAvailability({
+        organizationId: session.salon.organizationId, serviceId: person.serviceId, date: booking.date, addonIds: person.addonIds, quantity: 1,
+      });
+      if (!theirs.availableSlots.includes(person.time)) {
+        const near = [...theirs.availableSlots]
+          .sort((a, b) => Math.abs(toMinutes(a) - toMinutes(person.time!)) - Math.abs(toMinutes(b) - toMinutes(person.time!)))
+          .slice(0, 3).sort();
+        notFree.push(`${person.time} for ${person.serviceName}${near.length ? ` (nearest for it: ${near.join(", ")})` : " (nothing free for it that day)"}`);
+        person.time = null;
+      }
+    } catch {
+      // Checked again when the booking is made.
+    }
+  }
   if (notFree.length > 0) session.rejectedTime = notFree.join(", ");
 };
+
+const toMinutes = (time: string) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
 
 /**
  * Put what the caller just said into the booking, checked.
@@ -319,7 +343,10 @@ export const absorb = async (
    * is the booking, the rest are further bookings of one person each. One
    * time is just the time, and clears any earlier spread.
    */
-  const times = [...new Set((filled.times ?? []).filter((value) => /^\d{2}:\d{2}$/.test(value)))];
+  // A time that is another person's own ("my daughter at 3") is theirs, not a further booking.
+  const theirTimes = new Set(filled.others.map((person) => person.time).filter(Boolean));
+  const named = [...new Set((filled.times ?? []).filter((value) => /^\d{2}:\d{2}$/.test(value)))];
+  const times = [named[0], ...named.slice(1).filter((value) => !theirTimes.has(value))].filter((value): value is string => Boolean(value));
   if (times.length > 0) {
     said.time = times[0];
     said.moreTimes = times.slice(1);
@@ -338,6 +365,9 @@ export const absorb = async (
 
   session.booking = mergeBooking(session.booking, said);
   pruneStrayAddons(session);
+  // Different days for different people is not one booking: kept so the reply says so.
+  if (filled.differentDays) session.differentDays = true;
+  else if (filled.date || filled.serviceName || filled.others.length > 0) session.differentDays = false;
   // Who has what, when it could not be told. It stays until a turn names
   // services again; a reply about something else does not make it clear.
   const settledParty = filled.serviceName !== null || filled.others.length > 0;

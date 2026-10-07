@@ -427,6 +427,9 @@ const dispatch = async (
           );
         }
 
+        if (session.differentDays) {
+          return refuse("different_days", "Everyone in one booking is on the same day. Ask which one day suits them all, or book one person now and the other afterwards.");
+        }
         if (session.unclearParty) {
           return refuse("unclear_party", `It is not clear who has what: ${session.unclearParty} Ask that first.`);
         }
@@ -540,22 +543,23 @@ const dispatch = async (
          * one cannot be made, the ones just made are cancelled again.
          */
         if (wanted.others.length > 0) {
-          const partyMade: string[] = [];
+          const partyMade: { reference: string; time: string }[] = [];
           let partyFailed: string | null = null;
           for (const person of wanted.others) {
             try {
+              const theirTime = person.time ?? wanted.time!;
               const free = await isSlotFree({
-                organizationId: session.salon.organizationId, serviceId: person.serviceId, date: wanted.date!, time: wanted.time!, addonIds: person.addonIds, quantity: 1,
+                organizationId: session.salon.organizationId, serviceId: person.serviceId, date: wanted.date!, time: theirTime, addonIds: person.addonIds, quantity: 1,
               });
               if (!free?.isAvailable) { partyFailed = person.serviceName; break; }
               const booking = await createBooking({
                 organizationId: session.salon.organizationId,
                 firstName: wanted.firstName!, lastName: wanted.lastName!, phone: wanted.phone!, email: wanted.email,
                 serviceId: person.serviceId, addonIds: person.addonIds, quantity: 1,
-                startTime: `${wanted.date} ${wanted.time}`,
+                startTime: `${wanted.date} ${theirTime}`,
                 source: session.channel === "CHAT" ? "AI_CHAT" : "AI_CALL",
               });
-              if (booking?.bookingPublicId) partyMade.push(booking.bookingPublicId);
+              if (booking?.bookingPublicId) partyMade.push({ reference: booking.bookingPublicId, time: theirTime });
               else { partyFailed = person.serviceName; break; }
             } catch {
               partyFailed = person.serviceName;
@@ -563,17 +567,17 @@ const dispatch = async (
             }
           }
           if (partyFailed) {
-            for (const reference of [...made.map((item) => item.reference), ...partyMade]) {
+            for (const reference of [...made, ...partyMade].map((item) => item.reference)) {
               await cancelBooking({ organizationId: session.salon.organizationId, bookingPublicId: reference }).catch(() => undefined);
             }
             session.offered = null;
             session.reviewed = false;
             return refuse(
               "party_not_free",
-              `${wanted.time} works for some of the party but not for ${partyFailed}, so nothing was booked. Say so, check the day again and offer a time that suits everyone.`,
+              `The time for ${partyFailed} is no longer free, so nothing was booked for anyone. Say so, check the day again and offer times that work.`,
             );
           }
-          made.push(...partyMade.map((reference) => ({ time: wanted.time!, reference })));
+          made.push(...partyMade);
         }
 
         session.booking = wanted;

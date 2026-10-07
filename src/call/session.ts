@@ -78,6 +78,8 @@ export interface CallSession {
   rejectedAddons: string[];
   /** Who has which service is not clear from what they said; asked before anything else. */
   unclearParty: string | null;
+  /** They asked for people on different days; one booking is one day, so this is stopped and said. */
+  differentDays: boolean;
   /** A time the caller asked for that the diary never offered. */
   rejectedTime: string | null;
   /** When the asked-for day is full: the next days that have free times, for "what other days do you have?". */
@@ -163,6 +165,7 @@ export const newSession = (
   waitlistWindow: null,
   rejectedAddons: [],
   unclearParty: null,
+  differentDays: false,
   rejectedTime: null,
   nextFree: null,
   managing: null,

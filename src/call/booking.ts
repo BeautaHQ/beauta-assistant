@@ -35,8 +35,9 @@ export interface BookingState {
   moreTimes: string[];
   /**
    * Other people in the party who want a different service: "gel for me and
-   * kid polish for my daughter". Each is one more booking of one person, at
-   * the same day and time, under the same name and number.
+   * kid polish for my daughter". Each is one more booking of one person, on
+   * the same day — at the same time unless they gave their own — under the
+   * same name and number.
    */
   others: PartyMember[];
   firstName: string | null;
@@ -65,6 +66,8 @@ export interface PartyMember {
   serviceName: string;
   addonIds: number[];
   addonNames: string[];
+  /** Their own start time on the same day; null = the same time as the first person. */
+  time: string | null;
 }
 
 export const emptyBooking = (): BookingState => ({
