@@ -54,8 +54,9 @@ const roadmap = (channel: CallSession["channel"]) =>
 const COLLECT = `THIS TURN
 They want to book. Keep it short and on point: at most two short sentences, one question.
 Do not repeat back what you already have — it is taken down. Only say the booking back if they ask what you have, or at the read-back.
-If the briefing has free times for the day, give two or three concrete times to pick from ("5:00 or 5:30 PM?"), or the open range if it is wide. If the time they asked for is not free, say so in a few words and give the nearest. If they asked for part of the day ("after 5pm") and nothing there is free, say so and offer the nearest that day or another day. Day full: offer the waitlist or another day.
-Then ask for what is STILL MISSING, as one natural question. If the service could be two on the list, offer the two. Mention extras at most once.
+If the briefing has free times for the day, give two or three concrete times to pick from ("5:00 or 5:30 PM?"), or the open range if it is wide. If the time they asked for is not free, say so in a few words and give the nearest. If they asked for part of the day ("after 5pm") and nothing there is free, say so and offer the nearest that day or another day.
+Day full: say so once, then offer the waitlist for that day or one of the other days with room from the briefing. The waitlist needs no exact time: take the window they want ("3 to 4:20", "any time") and their name and number, read it back and get their yes, then call join_waitlist. Once it has run, one short line: they are on the waitlist and the salon will contact them if a spot opens.
+Then ask for what is STILL MISSING, as one natural question. If the service could be two on the list, offer the two. Mention extras at most once. Each person has exactly one service, plus any of that service's own extras; never suggest two services for one person, and only suggest extras listed for that person's service. Different services for different people are fine: each is booked side by side at the same time. If it is unclear who has which service or extra, ask.
 Never ask for a name, phone number or email until the service, day and time are settled.
 If they leave the time to you, propose the earliest free time and ask them to confirm it.
 If they say they have no phone number, say a booking needs one to be confirmed and ask for any number they can be reached on; an email alone is not enough.`;
@@ -68,7 +69,7 @@ const STEP: Record<Step, string> = {
   INFO: COLLECT,
 
   REVIEW: `THIS TURN
-Read the booking back exactly as the briefing has it — service, extras, people, day, time, name; nothing from the conversation that is not there — and ask them to confirm, in the language they are writing in. Say it as "I have you down for" (or the same in their language), never "booked". Several times means several bookings of one person: read each time out. Set readBack true.`,
+Read the booking back exactly as the briefing has it — service, extras, people, each other person's service, day, time, name; nothing from the conversation that is not there — and ask them to confirm, in the language they are writing in. Say it as "I have you down for" (or the same in their language), never "booked". Several times means several bookings of one person: read each time out. Set readBack true.`,
 
   BOOK: `THIS TURN
 They said yes. Call create_booking now. Then say it is done and say goodbye.`,
@@ -273,7 +274,11 @@ const diaryLine = (session: CallSession): string => {
     return "diary: not asked yet — needs the service and the day";
   }
   if (!offered) return "diary: could not be reached — say so and offer to take a message";
-  if (offered.slots.length === 0) return `diary: ${offered.date} is full — offer the waitlist or another day`;
+  if (offered.slots.length === 0) {
+    const others = (session.nextFree ?? []).map((day) => `${day.date}: ${describeOffer(day.slots)}`).join(" · ");
+    return `diary: ${offered.date} is FULL — there is no free time to pick, so never ask for or check a time on this day. Offer the waitlist for this day (the salon calls them if something frees up; no exact time needed, just the window they would like, or any time) or another day.
+other days with room: ${others || "none in the next week"}`;
+  }
   if (booking.time && offered.slots.includes(booking.time)) {
     return `diary: ${booking.time} on ${offered.date} is free`;
   }
@@ -325,7 +330,8 @@ Booked already, reference ${session.bookingPublicId}. Done — never book again.
     "BOOKING SO FAR",
     `service: ${service ? `${service.name} $${service.price}, ${service.durationMinutes} min` : "not settled"}`,
     `extras: ${booking.addonNames.length > 0 ? booking.addonNames.join(", ") : "none chosen"}`,
-    `people: ${booking.quantity ?? "1 (unless they say otherwise)"}`,
+    `people: ${booking.quantity ?? "1 (unless they say otherwise)"}${booking.others.length > 0 ? " for that service" : ""}`,
+    ...booking.others.map((person, index) => `also, person ${index + 2}: ${person.serviceName}${person.addonNames.length > 0 ? ` with ${person.addonNames.join(", ")}` : ""} — their own booking, same day and time`),
     `day: ${booking.date ?? "not settled"} · time: ${booking.time ?? "not settled"}${
       booking.moreTimes.length > 0 ? ` — and ${booking.moreTimes.join(", ")}: one booking per time, one person each` : ""
     }`,
@@ -344,6 +350,13 @@ Booked already, reference ${session.bookingPublicId}. Done — never book again.
           }`,
     );
   }
+  if (session.unclearParty) {
+    lines.push(`UNCLEAR WHO HAS WHAT: ${session.unclearParty} — ask that first, in one short question, and propose nothing else. Each person has one service and any of its extras.`);
+  }
+  for (const [index, person] of booking.others.entries()) {
+    const theirs = session.catalogue?.addonsByService.get(person.serviceId) ?? [];
+    lines.push(`extras for person ${index + 2}'s service (the only ones there are): ${theirs.length ? theirs.map((a) => `${a.name} $${a.price}`).join("; ") : "none"}`);
+  }
   if (session.rejectedAddons.length > 0) {
     lines.push(
       `DROPPED: ${session.rejectedAddons.join(", ")} — not offered with this service. Say so and offer what is above.`,
@@ -351,6 +364,14 @@ Booked already, reference ${session.bookingPublicId}. Done — never book again.
   }
 
   lines.push(diaryLine(session));
+  // When the whole party is done, from the service lengths; "need to be done by 5:30" is answered from this.
+  if (booking.time && booking.serviceId) {
+    const lengths = [booking.serviceId, ...booking.others.map((person) => person.serviceId)]
+      .map((id) => session.catalogue?.serviceById.get(id)?.durationMinutes ?? 0);
+    const [hour, minute] = booking.time.split(":").map(Number);
+    const end = hour! * 60 + minute! + Math.max(...lengths);
+    lines.push(`finishes about ${String(Math.floor(end / 60)).padStart(2, "0")}:${String(end % 60).padStart(2, "0")} (side by side; extras add a little)`);
+  }
   if (session.rejectedTime) {
     lines.push(`NOT FREE: ${session.rejectedTime}. Say so and offer the nearest of the times above.`);
   }
@@ -380,7 +401,11 @@ Booked already, reference ${session.bookingPublicId}. Done — never book again.
    */
   const open = gaps.filter((gap) => gap !== "confirmation");
   const appointment = open.filter((gap) => gap === "service" || gap === "date" || gap === "time");
-  const toAsk = appointment.length > 0 ? appointment : open;
+  // A full day goes on the waitlist, which needs who they are, not a time.
+  const dayFull = session.offered !== null && session.offered.date === booking.date && session.offered.slots.length === 0;
+  const toAsk = dayFull
+    ? open.filter((gap) => gap === "full name" || gap === "phone number")
+    : appointment.length > 0 ? appointment : open;
   const askLine = (lead: string) => [lead, ...toAsk.map((gap) => `- ${gap}: ${step(gap, session)}`)];
   // Asking a price names a service, but is not a booking; only asking to book is.
   const bookingInProgress = session.wantsToBook;
@@ -402,6 +427,15 @@ Booked already, reference ${session.bookingPublicId}. Done — never book again.
         ? "They are asking, not booking. Answer, then end with one short offer to book. Do not collect any of the details above."
         : "They are still asking. Answer and stop — no offer to book this time, they have had one. Do not collect any of the details above.",
     );
+    return lines.join("\n");
+  }
+  if (dayFull && !session.waitlisted) {
+    const window = session.waitlistWindow;
+    const wanted = !window ? "not said" : !window.from && !window.to ? "any time" : `${window.from ?? "opening"}–${window.to ?? "closing"}`;
+    lines.push(`waitlist window: ${wanted}`);
+    if (toAsk.length > 0) lines.push(...askLine("If they want the waitlist, ask for (one short question):"));
+    else if (!session.reviewed) lines.push("If they want the waitlist: read the request back exactly as the briefing has it — service, people, day, window, name, number — and ask them to confirm. Set readBack true. If they want another day, use one from the list above.");
+    else lines.push("Read back already. If they said yes, call join_waitlist now, then one short line: they are on the waitlist and the salon will contact them if a spot opens.");
     return lines.join("\n");
   }
   if (gaps.length === 0) {

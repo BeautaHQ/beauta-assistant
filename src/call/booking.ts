@@ -33,6 +33,12 @@ export interface BookingState {
    * together when they say yes. Empty for the ordinary single booking.
    */
   moreTimes: string[];
+  /**
+   * Other people in the party who want a different service: "gel for me and
+   * kid polish for my daughter". Each is one more booking of one person, at
+   * the same day and time, under the same name and number.
+   */
+  others: PartyMember[];
   firstName: string | null;
   lastName: string | null;
   /**
@@ -54,6 +60,13 @@ export interface BookingState {
   confirmed: boolean;
 }
 
+export interface PartyMember {
+  serviceId: number;
+  serviceName: string;
+  addonIds: number[];
+  addonNames: string[];
+}
+
 export const emptyBooking = (): BookingState => ({
   serviceId: null,
   serviceName: null,
@@ -63,6 +76,7 @@ export const emptyBooking = (): BookingState => ({
   date: null,
   time: null,
   moreTimes: [],
+  others: [],
   firstName: null,
   lastName: null,
   phone: null,
@@ -165,6 +179,7 @@ export const mergeBooking = (
     time: real(update.time) ?? current.time,
     // Given explicitly or not at all; an empty list given on purpose clears it.
     moreTimes: update.moreTimes ?? current.moreTimes,
+    others: update.others ?? current.others,
     firstName: real(update.firstName) ?? current.firstName,
     lastName: real(update.lastName) ?? current.lastName,
     phone: real(update.phone) ?? current.phone,

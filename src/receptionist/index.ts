@@ -1,4 +1,4 @@
-import { resolveSpokenDate, resolveSpokenTime } from "../salon/spokenDate";
+import { resolveSpokenDate, resolveSpokenTime, resolveSpokenWindow } from "../salon/spokenDate";
 import OpenAI from "openai";
 
 import { missingFields } from "../call/booking";
@@ -70,6 +70,12 @@ const OFF_LIMITS_GOODBYE = "I'm going to leave it there. Goodbye.";
  */
 const REASONING_MODEL = /^(o\d|gpt-[5-9])/.test(OPENAI_MODEL);
 
+/** Everything a read-back covers; a change to any of it needs a fresh read-back. */
+const reviewKey = (session: CallSession) => {
+  const { confirmed: _confirmed, ...booking } = session.booking;
+  return JSON.stringify({ booking, window: session.waitlistWindow });
+};
+
 export type Turn =
   | { role: "user" | "assistant"; content: string }
   | OpenAI.Chat.Completions.ChatCompletionMessageParam;
@@ -128,9 +134,29 @@ export const streamReply = async (
   const lastSaid = [...history].reverse().find((turn) => turn.role === "user")?.content;
   const spoken = typeof lastSaid === "string" ? resolveSpokenDate(lastSaid, session.salon.timezone) : null;
   if (spoken) read.filled.date = spoken;
+  /*
+   * "Between 3 and 4.20", "3 to 4", "từ 3h đến 4h" is one window, not two
+   * appointments. Read as two times it became two bookings of one person
+   * each, which changed the head count and threw away a group of eight.
+   * A window is not an exact time either, so none is taken from it.
+   */
+  const isWindow = typeof lastSaid === "string" && /\b(between|from)\b.+\b(and|to|till|until)\b|\b\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm|h)?\s*(?:to|till|until)\s*\d|\b\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm|h)\s*[-–]\s*\d|\b\d{1,2}(?:[:.]\d{2})?\s*[-–]\s*\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm|h)\b|từ.+(?:đến|tới)/iu.test(lastSaid);
+  if (isWindow && read.filled.times.length >= 2) {
+    read.filled.times = [];
+    read.filled.time = null;
+  }
+  // The window itself is kept in the session, worked out in code, not by the model.
+  const window = typeof lastSaid === "string" ? resolveSpokenWindow(lastSaid) : null;
+  if (window) {
+    session.waitlistWindow = window;
+    // A window is not an appointment time: nothing exact is taken from it.
+    read.filled.time = null;
+    read.filled.times = [];
+  }
+  else if (typeof lastSaid === "string" && /\bany ?time\b|giờ nào cũng|lúc nào cũng/iu.test(lastSaid)) session.waitlistWindow = { from: null, to: null };
   // An exact clock time, when the model missed it. Ranges ("after 5pm") are left to the model.
   const spokenTime = typeof lastSaid === "string" ? resolveSpokenTime(lastSaid) : null;
-  if (spokenTime && !read.filled.time && read.filled.times.length === 0) read.filled.time = spokenTime;
+  if (spokenTime && !isWindow && !read.filled.time && read.filled.times.length === 0) read.filled.time = spokenTime;
 
   // A phone number or email in anything they say is kept for the booking,
   // whatever the turn was about; the model only sometimes picked them out.
@@ -154,13 +180,29 @@ export const streamReply = async (
   }
 
   await absorb(session, read.filled, read.intent);
+  // A new window replaces an exact time picked earlier; the reply offers times inside it.
+  if (window) {
+    session.booking.time = null;
+    session.booking.moreTimes = [];
+  }
+
+  // A yes counts only for what was read back. Anything changed since — the
+  // service, the day, the time, the people, the window — and it is read again.
+  if (session.reviewed && session.reviewedKey !== reviewKey(session)) {
+    session.reviewed = false;
+    session.reviewedKey = null;
+  }
   session.intentMs = Date.now() - started;
 
   const intent = enforce(read.intent, session);
-  const step =
+  const stepFor =
     intent === "BOOK" || (intent === "CONFIRM" && !session.managing)
       ? currentStep(session, intent)
       : null;
+  // A full day ends on the waitlist, not on a booking: never the read-back
+  // and create_booking that a free day ends with.
+  const dayFull = session.offered !== null && session.offered.date === session.booking.date && session.offered.slots.length === 0;
+  const step = dayFull && !session.waitlisted && (stepFor === "REVIEW" || stepFor === "BOOK") ? "TIME" : stepFor;
   const topic = intent === "FAQ" ? read.topic : null;
   session.lastIntent = intent;
   if (intent === "BOOK") session.wantsToBook = true;
@@ -299,8 +341,12 @@ export const streamReply = async (
          */
         if (parsed.readBack === true) {
           const outstanding = missingFields(session.booking);
-          if (session.managing || outstanding.every((gap) => gap === "confirmation")) {
+          // A waitlist request is whole without a time: the day is full.
+          const waitlistReady = dayFull && outstanding.every((gap) => gap === "confirmation" || gap === "time");
+          // Nothing is read back as final while it is unclear who has what.
+          if (!session.unclearParty && (session.managing || waitlistReady || outstanding.every((gap) => gap === "confirmation"))) {
             session.reviewed = true;
+            session.reviewedKey = reviewKey(session);
           }
         }
 

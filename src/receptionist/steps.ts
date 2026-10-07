@@ -1,5 +1,5 @@
 import { checkAvailability } from "../clients/beautaApi";
-import { mergeBooking, missingFields, type BookingState } from "../call/booking";
+import { mergeBooking, missingFields, type BookingState, type PartyMember } from "../call/booking";
 import type { CallSession } from "../call/session";
 import { nameKey, type Catalogue } from "../salon/catalogue";
 import type { Filled, Intent } from "./intent";
@@ -109,9 +109,47 @@ const pruneStrayAddons = (session: CallSession) => {
   );
 };
 
+/**
+ * The other people in the party, each as a service and extras the salon has.
+ * A service the salon does not have is left out, its name kept to say so;
+ * extras not offered with that person's service are dropped the same way.
+ */
+const resolveOthers = (session: CallSession, said: Filled["others"]): PartyMember[] => {
+  const catalogue = session.catalogue;
+  if (!catalogue) return [];
+  const members: PartyMember[] = [];
+  for (const person of said) {
+    const serviceId = resolveService(catalogue, { serviceName: person.serviceName, serviceId: null } as Filled);
+    if (serviceId === null) {
+      if (person.serviceName) session.rejectedAddons.push(`${person.serviceName} (not a service here)`);
+      continue;
+    }
+    const own = catalogue.addonsByService.get(serviceId) ?? [];
+    const allowed = new Set(own.map((addon) => addon.id));
+    const ids = new Set<number>();
+    for (const name of person.addonNames) {
+      // Exact name first, then the one extra of THIS service whose name holds every word they used ("toes").
+      const exact = catalogue.addonIdByName.get(nameKey(name));
+      const words = nameKey(name).split(" ").filter((word) => word.length > 1);
+      const fits = own.filter((addon) => words.every((word) => nameKey(addon.name).includes(word)));
+      const id = exact !== undefined && allowed.has(exact) ? exact : fits.length === 1 ? fits[0]!.id : exact ?? null;
+      if (id === null) session.rejectedAddons.push(name);
+      else if (!allowed.has(id)) session.rejectedAddons.push(catalogue.addonNameById.get(id) ?? name);
+      else ids.add(id);
+    }
+    const addonIds = [...ids];
+    members.push({
+      serviceId, serviceName: catalogue.serviceById.get(serviceId)?.name ?? person.serviceName ?? "",
+      addonIds, addonNames: addonIds.map((id) => catalogue.addonNameById.get(id) ?? `extra ${id}`),
+    });
+  }
+  return members;
+};
+
 /** What the times on hand were fetched for. A different appointment needs a fresh look. */
 const offerKey = (booking: BookingState) =>
-  `${booking.serviceId}|${booking.date}|${[...booking.addonIds].sort().join(",")}|${booking.quantity}`;
+  `${booking.serviceId}|${booking.date}|${[...booking.addonIds].sort().join(",")}|${booking.quantity}|${
+    booking.others.map((person) => `${person.serviceId}+${[...person.addonIds].sort().join(",")}`).join(";")}`;
 
 /**
  * Ask the diary, once the booking is settled enough to ask it about.
@@ -123,13 +161,30 @@ const offerKey = (booking: BookingState) =>
  * checked against them — and dropped if it is not one of them, with the list
  * kept so the reply can offer the nearest.
  */
+const addDays = (date: string, days: number) => new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+
+/** Up to three of the next seven days after a full one that have free times for this booking. */
+const nextFreeDays = async (session: CallSession, after: string) => {
+  const booking = session.booking;
+  const found: { date: string; slots: string[] }[] = [];
+  const days = Array.from({ length: 7 }, (_, index) => addDays(after, index + 1));
+  const results = await Promise.all(days.map((date) => checkAvailability({
+    organizationId: session.salon.organizationId, serviceId: booking.serviceId!, date, addonIds: booking.addonIds, quantity: booking.quantity ?? 1,
+  }).catch(() => null)));
+  results.forEach((result, index) => {
+    if (result && result.availableSlots.length > 0 && found.length < 3) found.push({ date: days[index]!, slots: result.availableSlots });
+  });
+  return found;
+};
+
 const readDiary = async (session: CallSession) => {
   const booking = session.booking;
   // A service and a day are enough to look. One person unless they said more.
   if (!booking.serviceId || !booking.date) return;
 
   const key = offerKey(booking);
-  if (session.offered?.key !== key) {
+  const fresh = session.offered?.key !== key;
+  if (fresh) {
     try {
       const result = await checkAvailability({
         organizationId: session.salon.organizationId,
@@ -138,10 +193,24 @@ const readDiary = async (session: CallSession) => {
         addonIds: booking.addonIds,
         quantity: booking.quantity ?? 1,
       });
+      /*
+       * A party with different services can only start when every one of
+       * them has a free start then. Each is asked on its own; two of them
+       * wanting the same staff member is caught when the bookings are made,
+       * one after another, and the second is checked against the first.
+       */
+      let slots = result.availableSlots;
+      for (const person of booking.others) {
+        const theirs = await checkAvailability({
+          organizationId: session.salon.organizationId, serviceId: person.serviceId, date: booking.date, addonIds: person.addonIds, quantity: 1,
+        });
+        const free = new Set(theirs.availableSlots);
+        slots = slots.filter((slot) => free.has(slot));
+      }
       session.offered = {
         serviceId: booking.serviceId,
         date: result.date,
-        slots: result.availableSlots,
+        slots,
         key,
       };
     } catch {
@@ -152,7 +221,22 @@ const readDiary = async (session: CallSession) => {
   }
 
   session.rejectedTime = null;
+  if (!session.offered) return;
   const slots = session.offered.slots;
+
+  /*
+   * A full day is not a question of which time is free: none is. Every time
+   * they named used to be dropped as "not free", and the waitlist — which is
+   * for exactly that — was never reached. Instead the time they want is kept
+   * as the window for the waitlist, and the next days with room are looked up
+   * so "what other days do you have?" has an answer.
+   */
+  if (slots.length === 0) {
+    // Looked up once per full day, not on every turn spent on it.
+    if (fresh || session.nextFree === null) session.nextFree = await nextFreeDays(session, booking.date);
+    return;
+  }
+  session.nextFree = null;
   const notFree: string[] = [];
   if (booking.time && !slots.includes(booking.time)) {
     notFree.push(booking.time);
@@ -205,10 +289,24 @@ export const absorb = async (
     said.serviceName = catalogue?.serviceById.get(serviceId)?.name ?? filled.serviceName;
   }
 
-  const readAsExtra = settled && !filled.changeService && alsoAnExtra && filled.serviceName;
+  /*
+   * A name that is already someone's service in this party is that service,
+   * never an extra. The salon sells "Express Gel Hands" both ways, and the
+   * customer saying it again was read as an extra on itself — then dropped
+   * with "not offered", about the very service they had booked.
+   */
+  const partyServices = new Set(
+    [session.booking.serviceName, ...session.booking.others.map((person) => person.serviceName), said.serviceName]
+      .filter((name): name is string => Boolean(name))
+      .map(nameKey),
+  );
+  const notAService = (name: string) => !partyServices.has(nameKey(name));
+  const readAsExtra = settled && !filled.changeService && alsoAnExtra && filled.serviceName && notAService(filled.serviceName);
+  // By name only: the ids sit beside the names by position, which filtering would shift.
+  const extrasSaid = { ...filled, addonNames: filled.addonNames.filter(notAService), addonIds: [] };
   const addons = resolveAddons(
     catalogue,
-    readAsExtra ? { ...filled, addonNames: [...filled.addonNames, filled.serviceName!] } : filled,
+    readAsExtra ? { ...extrasSaid, addonNames: [...extrasSaid.addonNames, filled.serviceName!] } : extrasSaid,
   );
   // mergeBooking reads an empty list beside a head count as "no extras", so
   // the extras already on file are handed back when nothing new was said.
@@ -240,6 +338,17 @@ export const absorb = async (
 
   session.booking = mergeBooking(session.booking, said);
   pruneStrayAddons(session);
+  // Who has what, when it could not be told. It stays until a turn names
+  // services again; a reply about something else does not make it clear.
+  const settledParty = filled.serviceName !== null || filled.others.length > 0;
+  session.unclearParty = filled.unclearParty?.trim() || (settledParty ? null : session.unclearParty);
+  // The others are restated whole when they are mentioned, so they replace.
+  if (filled.others.length > 0) {
+    session.booking.others = resolveOthers(session, filled.others);
+    // "Two of us" said beside a different service for the second person counts them twice.
+    const total = (session.booking.quantity ?? 1);
+    if (session.booking.others.length > 0 && total > 1 && total === 1 + session.booking.others.length) session.booking.quantity = 1;
+  }
   session.rejectedAddons.push(...addons.unknown);
   // Looked up as soon as there is a service and a day, whatever kind of turn
   // this was: a question about Friday deserves Friday's times.

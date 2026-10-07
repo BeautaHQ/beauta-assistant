@@ -76,6 +76,10 @@ export interface Filled {
   times: string[];
   /** True when they leave the time to the receptionist: "any time", "you pick". The code then takes the earliest free one. */
   anyTime: boolean;
+  /** Set when it is not clear who has which service or which extras; says what is unclear. */
+  unclearParty: string | null;
+  /** Other people in the party who want a different service from the first: one entry each. */
+  others: { serviceName: string | null; addonNames: string[] }[];
   firstName: string | null;
   lastName: string | null;
   /** Chat only. On a call the number is caller ID and never comes from here. */
@@ -132,6 +136,8 @@ const TURN_FORMAT = {
             "time",
             "times",
             "anyTime",
+            "others",
+            "unclearParty",
             "firstName",
             "lastName",
             "phone",
@@ -148,6 +154,14 @@ const TURN_FORMAT = {
             time: nullable("string"),
             times: { type: "array", items: { type: "string" } },
             anyTime: { type: "boolean" },
+            others: {
+              type: "array",
+              items: {
+                type: "object", additionalProperties: false, required: ["serviceName", "addonNames"],
+                properties: { serviceName: nullable("string"), addonNames: { type: "array", items: { type: "string" } } },
+              },
+            },
+            unclearParty: nullable("string"),
             firstName: nullable("string"),
             lastName: nullable("string"),
             phone: nullable("string"),
@@ -205,7 +219,9 @@ ${session.catalogue?.servicesText ?? "SERVICES\n(none loaded)"}
 
 ${session.catalogue?.extrasText ?? "EXTRAS\n(none loaded)"}
 
-filled: only what their LAST message states — whether they are booking or only asking; a plain yes to a day or time the receptionist just proposed fills that day or time; a question about a service on a day fills the service and the day. Service and extras by the exact name and id above; a service that could be two is null. Once a service is known, a name that is on EXTRAS is an extra. changeService is true only if they say they want to change, switch or swap the chosen service, say "instead", or pick an option the receptionist just offered ("the cheaper one", "the second one") — then serviceName is that option. Naming a service is not a change, and a name on both lists is an extra. Day as YYYY-MM-DD — a day named without a year is the next such date from today, never a question; "this Saturday" is the coming one, "next Saturday" or "Saturday next week" is the one after it; time as HH:mm 24-hour, number as they gave it. times is every clock time they named for the appointments, in order ("9, 10 and 1pm, one each" is three); time is the first of them. anyTime is true only when they leave the time to you ("any time", "you pick", "whatever is free"). quantity is how many people, only from words about people ("just me", "two of us", "3 người"); a number beside giờ, pm, am or o'clock is a time, not a count. Null or [] when not said.
+filled: only what their LAST message states — whether they are booking or only asking; a plain yes to a day or time the receptionist just proposed fills that day or time; a yes to the services the receptionist just proposed ("yes", "yes express", "that's right") fills those services, the first person's in serviceName and the rest in others; for one person wanting two things ("gel nails and toes"), the main one is the service and the other its extra when it is on that service's extras; a question about a service on a day fills the service and the day. Service and extras by the exact name and id above; a service that could be two is null. Once a service is known, a name that is on EXTRAS is an extra. changeService is true only if they say they want to change, switch or swap the chosen service, say "instead", or pick an option the receptionist just offered ("the cheaper one", "the second one") — then serviceName is that option. Naming a service is not a change, and a name on both lists is an extra. Day as YYYY-MM-DD — a day named without a year is the next such date from today, never a question; "this Saturday" is the coming one, "next Saturday" or "Saturday next week" is the one after it; time as HH:mm 24-hour, number as they gave it. times is every clock time they named for the appointments, in order ("9, 10 and 1pm, one each" is three); time is the first of them. anyTime is true only when they leave the time to you ("any time", "you pick", "whatever is free"). Each person has exactly ONE service, plus any number of that service's own extras (the extras listed under it). Never give one person two services, and never split one person into two entries to fit two services: "gel manicure and gel pedicure for me" is one person asking for two services — set unclearParty ("Each person can have one service — would you like the gel manicure or the gel pedicure?"). "X and Y" for one person is service X with extra Y whenever Y is listed under X's extras ("gel nails and toes" = EXPRESS GEL HANDS with the extra EXPRESS GEL TOES; "kid nails and toes" = KID POLISH with its toes extra) — take that reading, do not ask. Only when no service on the list has the other thing as its extra, or it is not clear which person has which, still fill everyone who IS clear (others too), leave out only the unclear person's service, and set unclearParty to one short plain question for the customer ("Is the gel pedicure for you or your daughter?"); otherwise null.
+Several people wanting DIFFERENT services ("gel for me and kid polish for my daughter"): serviceName and addonNames are the first person's, and others has one entry per other person with their own service and extras — a name on both lists that is clearly for another person is that person's service, not an extra. quantity counts only the people having the first service. Restate others in full whenever their message changes who has what; [] when not said.
+quantity is how many people, only from words about people ("just me", "two of us", "3 người"); a number beside giờ, pm, am or o'clock is a time, not a count. Null or [] when not said.
 
 intent:
 BOOK      they want an appointment made, at any step of one — including any answer to a question you asked while booking, even "I don't know", and leaving a choice to you ("any time", "you pick").
@@ -229,6 +245,8 @@ const EMPTY: Filled = {
   time: null,
   times: [],
   anyTime: false,
+  others: [],
+  unclearParty: null,
   firstName: null,
   lastName: null,
   phone: null,

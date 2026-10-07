@@ -130,7 +130,7 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "join_waitlist",
       description:
-        "Put the caller on the waitlist for a day that is full, so the salon can ring them if something frees up. Offer this when check_availability comes back empty.",
+        "Put the customer on the waitlist for a day that is full, so the salon can contact them if something frees up. No exact time is needed; the window they asked for is already taken down. Only after reading it back and hearing their yes.",
       parameters: {
         type: "object",
         properties: {
@@ -427,6 +427,9 @@ const dispatch = async (
           );
         }
 
+        if (session.unclearParty) {
+          return refuse("unclear_party", `It is not clear who has what: ${session.unclearParty} Ask that first.`);
+        }
         if (!session.reviewed) {
           return refuse(
             "not_reviewed",
@@ -530,6 +533,49 @@ const dispatch = async (
 
         if (made.length === 0) throw new Error("booking was not created");
 
+        /*
+         * The rest of the party, each their own booking of one person at the
+         * same time, made after the first so the diary checks each against
+         * the ones already made. A family comes together or not at all: if
+         * one cannot be made, the ones just made are cancelled again.
+         */
+        if (wanted.others.length > 0) {
+          const partyMade: string[] = [];
+          let partyFailed: string | null = null;
+          for (const person of wanted.others) {
+            try {
+              const free = await isSlotFree({
+                organizationId: session.salon.organizationId, serviceId: person.serviceId, date: wanted.date!, time: wanted.time!, addonIds: person.addonIds, quantity: 1,
+              });
+              if (!free?.isAvailable) { partyFailed = person.serviceName; break; }
+              const booking = await createBooking({
+                organizationId: session.salon.organizationId,
+                firstName: wanted.firstName!, lastName: wanted.lastName!, phone: wanted.phone!, email: wanted.email,
+                serviceId: person.serviceId, addonIds: person.addonIds, quantity: 1,
+                startTime: `${wanted.date} ${wanted.time}`,
+                source: session.channel === "CHAT" ? "AI_CHAT" : "AI_CALL",
+              });
+              if (booking?.bookingPublicId) partyMade.push(booking.bookingPublicId);
+              else { partyFailed = person.serviceName; break; }
+            } catch {
+              partyFailed = person.serviceName;
+              break;
+            }
+          }
+          if (partyFailed) {
+            for (const reference of [...made.map((item) => item.reference), ...partyMade]) {
+              await cancelBooking({ organizationId: session.salon.organizationId, bookingPublicId: reference }).catch(() => undefined);
+            }
+            session.offered = null;
+            session.reviewed = false;
+            return refuse(
+              "party_not_free",
+              `${wanted.time} works for some of the party but not for ${partyFailed}, so nothing was booked. Say so, check the day again and offer a time that suits everyone.`,
+            );
+          }
+          made.push(...partyMade.map((reference) => ({ time: wanted.time!, reference })));
+        }
+
         session.booking = wanted;
         session.bookingPublicId = made[0]!.reference;
         session.bookingPublicIds.push(...made.map((item) => item.reference));
@@ -546,33 +592,45 @@ const dispatch = async (
       }
 
       case "join_waitlist": {
-        if (!args.firstName || !args.lastName) {
+        // Everything comes from what is taken down, not from the model's copy.
+        const held = session.booking;
+        const firstName = held.firstName?.trim() || args.firstName;
+        const lastName = held.lastName?.trim() || args.lastName;
+        if (!firstName || !lastName) {
           return refuse("not_ready", "Get their first and last name before adding them.");
         }
+        // Same gate as a booking: nothing is written before they have heard it all and said yes.
+        if (!session.reviewed) {
+          return refuse("not_reviewed", "Read the waitlist request back — service, people, day, window, name, number — and wait for their yes.");
+        }
 
-        // The salon rings back, so the whole day stands for "that day".
+        // The window they asked for, kept in code; open ends cover the rest of the day.
+        const from = session.waitlistWindow?.from ?? "08:00";
+        const to = session.waitlistWindow?.to ?? "21:00";
+        // The service, day and extras are the ones already taken down and
+        // checked, never the model's copy: it put the wrong service id here.
+        const serviceId = held.serviceId ?? args.serviceId;
+        const date = held.date ?? args.date;
+        if (!serviceId || !date) return refuse("not_ready", "Settle the service and the day first.");
         await joinWaitlist({
           organizationId: session.salon.organizationId,
-          firstName: args.firstName,
-          lastName: args.lastName,
-          phone: args.phone ?? session.booking.phone ?? session.phone,
-          serviceId: args.serviceId,
-          addonIds: args.addonIds ?? [],
-          slots: [{ startTime: `${args.date} 09:00`, endTime: `${args.date} 17:00` }],
-          notes:
-            session.channel === "CHAT"
-              ? "Added by the AI receptionist in chat."
-              : "Added by the AI receptionist over the phone.",
+          firstName,
+          lastName,
+          phone: held.phone ?? args.phone ?? session.phone,
+          serviceId,
+          addonIds: held.serviceId ? held.addonIds : (args.addonIds ?? []),
+          slots: [{ startTime: `${date} ${from}`, endTime: `${date} ${to}` }],
+          // A waitlist entry holds one person; a group is kept in the note so the salon sees it.
+          notes: [
+            (held.quantity ?? 1) > 1 ? `Group of ${held.quantity} people.` : null,
+            held.others.length > 0 ? `Also: ${held.others.map((person) => person.serviceName).join(", ")} (one person each).` : null,
+            session.waitlistWindow ? `Wants ${from}–${to}.` : "Any time that day.",
+            session.channel === "CHAT" ? "Added by the AI receptionist in chat." : "Added by the AI receptionist over the phone.",
+          ].filter(Boolean).join(" "),
         });
 
         session.waitlisted = true;
-        session.booking = mergeBooking(session.booking, {
-          serviceId: args.serviceId,
-          date: args.date,
-          firstName: args.firstName,
-          lastName: args.lastName,
-          phone: args.phone,
-        });
+        session.booking = mergeBooking(session.booking, { serviceId, date, firstName, lastName });
 
         return JSON.stringify({ ok: true, waitlisted: true });
       }

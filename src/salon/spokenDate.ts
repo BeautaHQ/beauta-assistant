@@ -145,3 +145,40 @@ export const resolveSpokenTime = (message: string): string | null => {
   if (hour > 23 || minute > 59) return null;
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 };
+
+/** "3", "4.20", "3:30pm", "3h chiều" as HH:mm; bare 1–7 o'clock is the afternoon at a salon. */
+const clockOf = (hourText: string, minuteText: string | undefined, meridiem: string | undefined, fallback?: string) => {
+  let hour = Number(hourText);
+  const minute = minuteText ? Number(minuteText) : 0;
+  const half = meridiem ?? fallback;
+  if (half === "pm" || half === "chiều" || half === "tối") { if (hour < 12) hour += 12; }
+  else if (half === "am" || half === "sáng") { if (hour === 12) hour = 0; }
+  else if (hour >= 1 && hour <= 7) hour += 12;
+  return hour <= 23 && minute <= 59 ? `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}` : null;
+};
+
+const T = String.raw`(\d{1,2})(?:[:.h](\d{2}))?\s*(am|pm)?\s*(?:h|giờ)?\s*(sáng|chiều|tối)?`;
+
+/**
+ * The part of the day they want, for a waitlist or for finding a time:
+ * "between 3 and 4.20", "3-4pm", "từ 3h đến 4h chiều", "after 5pm",
+ * "before 2". null when the message names no window. Open ends are null:
+ * "after 5pm" is { from: "17:00", to: null }.
+ */
+export const resolveSpokenWindow = (message: string): { from: string | null; to: string | null } | null => {
+  const text = message.toLocaleLowerCase("vi");
+  const range = new RegExp(String.raw`(?:between|from|từ)?\s*${T}\s*(?:-|–|and|to|till|until|đến|tới)\s*${T}`, "u").exec(text);
+  // A bare "9-10" is as likely a date as a window, so a dash alone needs a clock word (pm, h, giờ...).
+  const worded = range && /between|from|từ|and|to|till|until|đến|tới/u.test(range[0]);
+  const clocked = range && /am|pm|h|giờ|sáng|chiều|tối|[:.]\d{2}/u.test(range[0]);
+  if (range && (worded || clocked)) {
+    const to = clockOf(range[5]!, range[6], range[7], range[8]);
+    const from = clockOf(range[1]!, range[2], range[3], range[4]);
+    if (from && to && from < to) return { from, to };
+  }
+  const after = new RegExp(String.raw`(?:after|from|sau|từ)\s*${T}`, "u").exec(text);
+  if (after) { const from = clockOf(after[1]!, after[2], after[3], after[4]); if (from) return { from, to: null }; }
+  const before = new RegExp(String.raw`(?:before|trước)\s*${T}`, "u").exec(text);
+  if (before) { const to = clockOf(before[1]!, before[2], before[3], before[4]); if (to) return { from: null, to }; }
+  return null;
+};

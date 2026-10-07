@@ -61,6 +61,13 @@ export interface CallSession {
    */
   reviewed: boolean;
   /**
+   * What was read back, as a fingerprint. A yes only counts for exactly that:
+   * if anything changes after the read-back, it is read back again.
+   */
+  reviewedKey: string | null;
+  /** The part of the day they want, worked out in code from their words; null ends are open. */
+  waitlistWindow: { from: string | null; to: string | null } | null;
+  /**
    * Extras the caller asked for that their service does not offer.
    *
    * Stripped from the booking as they arrive rather than refused later: the
@@ -69,8 +76,12 @@ export interface CallSession {
    * ones went and what is actually on offer.
    */
   rejectedAddons: string[];
+  /** Who has which service is not clear from what they said; asked before anything else. */
+  unclearParty: string | null;
   /** A time the caller asked for that the diary never offered. */
   rejectedTime: string | null;
+  /** When the asked-for day is full: the next days that have free times, for "what other days do you have?". */
+  nextFree: { date: string; slots: string[] }[] | null;
   /**
    * An existing booking this caller has proved is theirs, when they rang to
    * change or cancel one. Null until the day and time they gave matched a
@@ -148,8 +159,12 @@ export const newSession = (
   booking: { ...emptyBooking(), phone: channel === "PHONE" ? phone : null },
   offered: null,
   reviewed: false,
+  reviewedKey: null,
+  waitlistWindow: null,
   rejectedAddons: [],
+  unclearParty: null,
   rejectedTime: null,
+  nextFree: null,
   managing: null,
   lastIntent: null,
   transferring: false,
@@ -180,6 +195,8 @@ export const startAnotherBooking = (session: CallSession, options: { keepService
   session.booking = { ...emptyBooking(), firstName, lastName, phone, email, quantity, ...same };
   session.offered = null;
   session.reviewed = false;
+  session.reviewedKey = null;
+  session.waitlistWindow = null;
   session.rejectedAddons = [];
   session.rejectedTime = null;
   session.bookingPublicId = null;
