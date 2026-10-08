@@ -47,6 +47,14 @@ export const GREETING =
 
 export const LANGUAGE = process.env.LANGUAGE ?? "en-AU";
 
+/**
+ * Who turns the caller's speech into text, set on every call's TwiML — no
+ * Twilio console setting involved. Google's telephony model is trained on
+ * phone audio; Deepgram (e.g. nova-3-general) is the other provider Twilio offers.
+ */
+export const STT_PROVIDER = process.env.STT_PROVIDER || "Google";
+export const STT_MODEL = process.env.STT_MODEL || "telephony";
+
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 /*
  * gpt-4o rather than the mini. On the same scripted call the mini read nine
@@ -69,7 +77,7 @@ export const handoffUrl = () => `${PUBLIC_URL}/handoff`;
  * who asks "how do I book?" at the salon's own page. Optional: without it the
  * answer is "on our website" and nothing more specific.
  */
-export const BOOKING_SITE_URL = (process.env.BOOKING_SITE_URL ?? "").replace(/\/$/, "");
+export const BOOKING_SITE_URL = (process.env.BOOKING_SITE_URL || "https://booking.beauta.co").replace(/\/$/, "");
 
 export const BEAUTA_API_URL = (
   process.env.BEAUTA_API_URL ?? "http://localhost:3001"

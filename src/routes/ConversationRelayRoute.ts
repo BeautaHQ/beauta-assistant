@@ -36,6 +36,7 @@ export const conversationRelayRouter = (app: FastifyInstance) => {
       found: false,
       staffPhone: null,
       phone: null,
+      email: null,
       addressNote: null,
       website: null,
       bookingUrl: null,

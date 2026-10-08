@@ -118,7 +118,9 @@ The briefing's diary line is the answer: say what is free that day, naming the s
 Answer only from SALON INFO. Never guess an address, an hour or a policy.`,
 
   HOWTO: `THIS TURN
-Three ways to book, in one breath: on the website (the booking page in SALON INFO, if there is one), with you right now, or by ringing the salon (the phone in SALON INFO, if there is one). Then ask if they would like to book now, and stop.`,
+Where or how to book in general: list the ways, one short line each — online at the booking page (the link exactly as in SALON INFO), by phone (the phone in SALON INFO), by email (the email in SALON INFO), or right here with you. Leave out any SALON INFO does not have; never give the website for booking when there is a booking page.
+Where to find or how to book something in particular: answer that, from the PRICE LIST. The booking page goes: pick the service, then its add-ons, then the staff member, then the day and time, then confirm. A service is picked on the first screen; an extra is an add-on, ticked on the add-ons screen after picking the service it belongs to — name that service. Not on the list: say it is not on the menu.
+Then ask if they would like to book now, and stop.`,
 
   GIFTCARD: `THIS TURN
 Answer only what they asked, from GIFT CARDS: which cards there are and what they cost, or that none are on file. You cannot sell one — a card is bought on the gift card page in SALON INFO, and its code is used at checkout on the website or in the salon. An address is said exactly as written in SALON INFO, never shortened or merged with another.
@@ -136,6 +138,7 @@ const salonInfo = (session: CallSession): string => {
   const { salon } = session;
   const lines = [`name: ${salon.name}`, `timezone: ${salon.timezone}`];
   if (salon.phone) lines.push(`phone: ${salon.phone}`);
+  if (salon.email) lines.push(`email: ${salon.email}`);
   if (salon.addressNote) lines.push(`address: ${salon.addressNote}`);
   if (salon.website) lines.push(`website: ${salon.website}`);
   if (salon.bookingUrl) lines.push(`booking page: ${salon.bookingUrl}`);
@@ -174,10 +177,14 @@ export const systemPrompt = (
      * not the "3–4 weeks" the owner had written, and a five-year-old was
      * offered kids' polish the owner sells from age six.
      */
-    if (topic === "PRICE") list = `\nPRICE LIST\n${catalogue?.flatText ?? ""}\n`;
-    // A question about a day needs the services only to settle which one it is about.
-    else if (topic === "AVAILABILITY" && !session.booking.serviceId) list = `\n${catalogue?.servicesText ?? ""}\n`;
-    else if (topic === "GIFTCARD") list = `\nGIFT CARDS\n${session.salon.giftCards ?? "(none on file)"}\n`;
+    // "Where do I book nail art?" needs the menu to say what nail art is filed under.
+    /*
+     * Every question also sees the whole menu. Split by topic, a question that
+     * fell between two ("where does it say to book nail art?") had no menu and
+     * was told to ring the salon. Public services and their add-ons only.
+     */
+    list = `\nPRICE LIST\n${catalogue?.flatText ?? ""}\n`;
+    if (topic === "GIFTCARD") list += `\nGIFT CARDS\n${session.salon.giftCards ?? "(none on file)"}\n`;
     list += `\n${salonInfo(session)}\n`;
   }
 

@@ -25,6 +25,10 @@ export const conversationRelayTwiml = (opts: {
   url: string;
   welcomeGreeting?: string;
   language?: string;
+  transcriptionProvider?: string;
+  speechModel?: string;
+  /** Words the caller is likely to say (the salon's name, its services), so they are heard right. */
+  hints?: string[];
   /**
    * Where Twilio posts when the session ends, to ask what to do next.
    *
@@ -41,6 +45,9 @@ export const conversationRelayTwiml = (opts: {
       ? `welcomeGreeting="${escapeXml(opts.welcomeGreeting)}"`
       : "",
     opts.language ? `language="${escapeXml(opts.language)}"` : "",
+    opts.transcriptionProvider ? `transcriptionProvider="${escapeXml(opts.transcriptionProvider)}"` : "",
+    opts.speechModel ? `speechModel="${escapeXml(opts.speechModel)}"` : "",
+    opts.hints?.length ? `hints="${escapeXml(opts.hints.join(","))}"` : "",
   ]
     .filter(Boolean)
     .join(" ");

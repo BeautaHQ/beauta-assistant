@@ -1,7 +1,8 @@
 import type { FastifyInstance } from "fastify";
 
 import { isValidTwilioSignature } from "../auth/twilioSignature";
-import { FORWARD_UNKNOWN_TO, LANGUAGE, PUBLIC_URL, handoffUrl, relayUrl } from "../config";
+import { FORWARD_UNKNOWN_TO, LANGUAGE, PUBLIC_URL, STT_MODEL, STT_PROVIDER, handoffUrl, relayUrl } from "../config";
+import { getCatalogue } from "../salon/catalogue";
 import { openingLine } from "../salon/greeting";
 import { salonForCall } from "../salon/lookup";
 import {
@@ -27,6 +28,25 @@ interface IncomingCallBody {
  * do about it. The answer is TwiML, and ours says "open a socket and let us
  * talk to them".
  */
+/**
+ * What this salon's callers are likely to say: its name and what it sells.
+ * Menus are written "DELUXE PEDICURE - GEL" or "SNS / Acrylic Removal", so
+ * each name is split into the parts a caller would say. Public services and
+ * add-ons only; the catalogue is cached, so the call is answered as fast.
+ */
+const speechHints = async (organizationId: number, salonName: string) => {
+  const catalogue = await getCatalogue(organizationId);
+  const names = [
+    ...[...catalogue.serviceById.values()].map((service) => service.name),
+    ...catalogue.addonNameById.values(),
+  ];
+  const parts = names
+    .flatMap((name) => name.split(/\s+[-–/]\s+|\s*\/\s*|[(),]/))
+    .map((part) => part.replace(/\s+/g, " ").trim().toLowerCase())
+    .filter((part) => part.length > 2 && !/^\$?\d/.test(part));
+  return [salonName, ...new Set(parts)].slice(0, 100);
+};
+
 export const incomingCallRouter = (app: FastifyInstance) => {
   app.post<{ Body: IncomingCallBody }>(
     "/incoming",
@@ -143,6 +163,9 @@ export const incomingCallRouter = (app: FastifyInstance) => {
           url: relayUrl(),
           welcomeGreeting: openingLine("PHONE", salon.name),
           language: LANGUAGE,
+          transcriptionProvider: STT_PROVIDER,
+          speechModel: STT_MODEL,
+          hints: await speechHints(salon.organizationId, salon.name).catch(() => [salon.name]),
           action: handoffUrl(),
         }),
       );

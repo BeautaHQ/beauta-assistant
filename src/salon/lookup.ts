@@ -30,6 +30,7 @@ export interface Salon {
    * and then the receptionist says it has not been told, rather than guessing.
    */
   phone: string | null;
+  email: string | null;
   addressNote: string | null;
   website: string | null;
   /** The salon's own booking page, when the site address is configured. */
@@ -55,6 +56,7 @@ const SALON_COLUMNS = {
   timezone: true,
   phone: true,
   secondaryPhone: true,
+  email: true,
   addressNote: true,
   website: true,
   slug: true,
@@ -68,6 +70,7 @@ type SalonRow = {
   timezone: string;
   phone: string | null;
   secondaryPhone: string | null;
+  email: string | null;
   addressNote: string | null;
   website: string | null;
   slug: string | null;
@@ -169,6 +172,7 @@ const asSalon = async (row: SalonRow): Promise<Salon> => ({
   found: true,
   staffPhone: row.secondaryPhone ?? row.phone,
   phone: row.phone,
+  email: row.email?.trim() || null,
   addressNote: row.addressNote?.trim() || null,
   website: row.website?.trim() || null,
   bookingUrl: BOOKING_SITE_URL && row.slug ? `${BOOKING_SITE_URL}/booking/${row.slug}` : null,
@@ -270,6 +274,7 @@ export const salonById = async (organizationId: number): Promise<Salon> => {
     found: false,
     staffPhone: null,
     phone: null,
+    email: null,
     addressNote: null,
     website: null,
     bookingUrl: null,

@@ -231,7 +231,7 @@ intent:
 BOOK      they want an appointment made, at any step of one — including any answer to a question you asked while booking, even "I don't know", and leaving a choice to you ("any time", "you pick").
 CONFIRM   a plain yes to the read-back. A name is not a yes. A time is not a yes.
 MANAGE    move or cancel a booking they already have.
-FAQ       a question, not a request to book. Then topic: PRICE (price, duration, what is offered, a discount or a cheaper option), AVAILABILITY (whether a day or time is free for an appointment), SALON (whether or when the salon is open, address, parking, policies, anything about the salon itself), HOWTO (how or where to book), GIFTCARD (buying, giving or using a gift card or voucher, or the balance on one). topic is null for every other intent.
+FAQ       a question, not a request to book. Then topic: PRICE (price, duration, what is offered, a discount or a cheaper option), AVAILABILITY (whether a day or time is free for an appointment), SALON (whether or when the salon is open, address, parking, policies, anything about the salon itself), HOWTO (how or where to book, or where on the website or booking page to find or book something), GIFTCARD (buying, giving or using a gift card or voucher, or the balance on one). topic is null for every other intent.
 TRANSFER  they ask for a person, or have a complaint or a refund. Asking about a price or a discount is FAQ.
 OTHER     hello, thanks, goodbye, small talk, a joke. Swearing out of frustration is still OTHER or BOOK.
 UNSUPPORTED  a request or question that is none of the above — nothing to do with booking, the salon or what it offers (the weather, a taxi, a recipe, another business).
