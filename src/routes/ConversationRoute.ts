@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { missingFields } from "../call/booking";
 import { closeCall, openCall, saveProgress } from "../call/callLog";
 import { newSession, record, type CallSession } from "../call/session";
+import { adoptCustomer, customerFromCallerId, customerFromToken } from "../call/customer";
 import { GREETING } from "../config";
 import { streamReply, type Turn } from "../receptionist";
 import { getCatalogue } from "../salon/catalogue";
@@ -64,6 +65,7 @@ export const conversationRouter = (app: FastifyInstance) => {
       to?: string;
       forwardedFrom?: string;
       organizationId?: number;
+      customerToken?: string;
     };
   }>(
     "",
@@ -96,6 +98,12 @@ export const conversationRouter = (app: FastifyInstance) => {
           forwardedFrom: Type.Optional(
             Type.String({ description: "The salon's own line, on a forwarded call" }),
           ),
+          customerToken: Type.Optional(
+            Type.String({
+              description:
+                "On CHAT: the bearer token of a visitor signed in on the booking site. A live session fills in their number, name and email, so the receptionist greets them by name and never asks for those. An unknown or expired token is ignored.",
+            }),
+          ),
         }),
         response: {
           404: Type.Object({ success: Type.Boolean(), message: Type.String() }),
@@ -113,6 +121,16 @@ export const conversationRouter = (app: FastifyInstance) => {
                 "Which number identified the salon: forwardedFrom, to, to:ambiguous, or fallback",
             }),
             services: Type.Integer({ description: "How many services it can talk about" }),
+            customer: Type.Union(
+              [
+                Type.Object({
+                  firstName: Type.Union([Type.String(), Type.Null()]),
+                  how: Type.String({ description: "signed-in or caller-id" }),
+                }),
+                Type.Null(),
+              ],
+              { description: "Who the receptionist already knows they are, if anyone" },
+            ),
           }),
         },
       },
@@ -152,16 +170,27 @@ export const conversationRouter = (app: FastifyInstance) => {
       session.toNumber = request.body?.to ?? null;
       session.forwardedFrom = request.body?.forwardedFrom ?? null;
       session.catalogue = await getCatalogue(salon.organizationId).catch(() => null);
+      // Who they are, if the platform knows: a signed-in visitor's token on
+      // chat, the caller ID on the phone. A failed lookup only means "ask".
+      const known = await (
+        channel === "CHAT"
+          ? request.body?.customerToken
+            ? customerFromToken(request.body.customerToken)
+            : Promise.resolve(null)
+          : customerFromCallerId(from)
+      ).catch(() => null);
+      adoptCustomer(session, known);
 
       calls.set(conversationId, { session, history: [], at: Date.now(), opened: false });
 
       return reply.send({
         conversationId,
         channel,
-        greeting: openingLine(channel, salon.name),
+        greeting: openingLine(channel, salon.name, known?.firstName ?? null),
         salon,
         matchedOn,
         services: session.catalogue?.serviceIds.size ?? 0,
+        customer: known ? { firstName: known.firstName, how: known.how } : null,
       });
     },
   );

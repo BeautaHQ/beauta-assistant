@@ -1938,3 +1938,60 @@ model Conversation {
   @@index([organizationId, startedAt])
   @@map("conversation")
 }
+
+// ---------------------------------------------------------------------------
+// Customer sign-in: a phone number proved by a one-time code.
+//
+// No account and no sign-up. A customer is their phone number — that is what
+// every booking is filed under — so proving the number is the whole login.
+// Written and read by beauta-voice (the chat receptionist), which is why
+// neither table is tied to an organization: a customer is one person across
+// every salon they use.
+// ---------------------------------------------------------------------------
+
+model CustomerOtp {
+  id    Int    @id @default(autoincrement())
+  // E.164, the shape bookings store.
+  phone String
+  // SHA-256 of the six digits plus a server secret. The digits themselves are
+  // never stored: a copy of this table must not be a list of valid codes.
+  codeHash   String    @map("code_hash")
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  // Wrong guesses so far. A code is dead after a handful, expired or not.
+  attempts   Int       @default(0)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([phone, createdAt])
+  @@map("customer_otp")
+}
+
+model CustomerSession {
+  id    Int    @id @default(autoincrement())
+  phone String
+  // SHA-256 of the bearer token the browser holds. Same reasoning as codeHash.
+  tokenHash  String    @unique @map("token_hash")
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(6)
+  lastSeenAt DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([phone])
+  @@map("customer_session")
+}
+
+// What the customer says about themselves, kept by the platform for them.
+// Separate from `customer`, which is each salon's own record and the salon's
+// to edit: a booking changed by the salon must not rewrite the name the
+// customer uses everywhere. Keyed by phone, like the sign-in.
+model CustomerProfile {
+  id        Int      @id @default(autoincrement())
+  phone     String   @unique
+  firstName String   @map("first_name")
+  lastName  String   @map("last_name")
+  email     String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("customer_profile")
+}

@@ -342,11 +342,20 @@ Booked already, reference ${session.bookingPublicId}. Done — never book again.
     `day: ${booking.date ?? "not settled"} · time: ${booking.time ?? "not settled"}${
       booking.moreTimes.length > 0 ? ` — and ${booking.moreTimes.join(", ")}: one booking per time, one person each` : ""
     }`,
-    `name: ${[booking.firstName, booking.lastName].filter(Boolean).join(" ") || "not given"}`,
+    `name: ${[booking.firstName, booking.lastName].filter(Boolean).join(" ") || "not given"}${
+      session.customer && (session.customer.firstName || session.customer.lastName) ? " (from their account, never ask)" : ""
+    }`,
     session.channel === "PHONE"
       ? `phone: ${session.phone} (caller ID, never ask)`
-      : `phone: ${booking.phone ?? "not given"} · email: ${booking.email ?? "not given"}`,
+      : `phone: ${booking.phone ?? "not given"}${session.customer ? " (from their account, never ask)" : ""} · email: ${booking.email ?? "not given"}`,
   ];
+  if (session.customer) {
+    lines.push(
+      `the customer is ${session.customer.how === "signed-in" ? "signed in" : "recognised by their number"}${
+        session.customer.firstName ? ` as ${session.customer.firstName}` : ""
+      }: use their first name now and then, never ask who they are or for their number.`,
+    );
+  }
 
   if (booking.serviceId) {
     lines.push(

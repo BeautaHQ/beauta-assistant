@@ -19,7 +19,10 @@ import { GREETING } from "../config";
 export const openingLine = (
   channel: "PHONE" | "CHAT",
   salonName: string | null,
+  firstName: string | null = null,
 ): string => {
+  // "Hi Lan," when the platform knows them; a bare "Hi," otherwise.
+  const hi = firstName ? `Hi ${firstName},` : "Hi,";
   /*
    * Nothing identified the salon, so fall back to whatever was configured
    * rather than greet them by the name of a salon we are guessing at.
@@ -31,6 +34,6 @@ export const openingLine = (
   if (!salonName || salonName.trim().toLowerCase() === "the salon") return GREETING;
 
   return channel === "CHAT"
-    ? `Hi, I'm the virtual receptionist for ${salonName}. Ask me anything about our services, or tell me what you'd like booked and I'll take care of it.`
-    : `Hi, you've reached ${salonName}. I'm the virtual receptionist — how can I help?`;
+    ? `${hi} I'm the virtual receptionist for ${salonName}. Ask me anything about our services, or tell me what you'd like booked and I'll take care of it.`
+    : `${hi} you've reached ${salonName}. I'm the virtual receptionist — how can I help?`;
 };

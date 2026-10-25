@@ -55,6 +55,14 @@ export const LANGUAGE = process.env.LANGUAGE ?? "en-AU";
 export const STT_PROVIDER = process.env.STT_PROVIDER || "Google";
 export const STT_MODEL = process.env.STT_MODEL || "telephony";
 
+/**
+ * Mixed into the hash of a customer's sign-in token, exactly as in beauta-api
+ * (CUSTOMER_AUTH_SECRET there too). Needed to recognise a signed-in visitor
+ * from the token the chat widget passes; with a different value every token
+ * simply looks unknown and the receptionist asks for their details as before.
+ */
+export const CUSTOMER_AUTH_SECRET = process.env.CUSTOMER_AUTH_SECRET ?? "";
+
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 /*
  * gpt-4o rather than the mini. On the same scripted call the mini read nine

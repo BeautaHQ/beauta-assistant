@@ -1,4 +1,5 @@
 import type { FoundBooking } from "../clients/beautaApi";
+import type { KnownCustomer } from "./customer";
 import { emptyBooking, type BookingState } from "./booking";
 import type { Catalogue } from "../salon/catalogue";
 import type { Salon } from "../salon/lookup";
@@ -41,6 +42,12 @@ export interface CallSession {
   phone: string;
   toNumber: string | null;
   forwardedFrom: string | null;
+  /**
+   * Who they are, when the platform already knew before a word was said:
+   * signed in on the booking site, or a caller ID with a profile. Their
+   * details are also written onto the booking, so nothing asks for them.
+   */
+  customer: KnownCustomer | null;
   catalogue: Catalogue | null;
   booking: BookingState;
   /**
@@ -155,6 +162,7 @@ export const newSession = (
   phone,
   toNumber: null,
   forwardedFrom: null,
+  customer: null,
   catalogue: null,
   // Caller ID is the one thing a call knows before a word is said. A chat
   // starts with nothing and has to ask.

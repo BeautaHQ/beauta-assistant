@@ -8,6 +8,7 @@ import { getCatalogue } from "../salon/catalogue";
 import { salonForCall } from "../salon/lookup";
 import { streamReply, type Turn } from "../receptionist";
 import { newSession, record, type CallSession } from "../call/session";
+import { adoptCustomer, customerFromCallerId } from "../call/customer";
 
 /** What ConversationRelay sends us. Only the fields we act on are typed. */
 type RelayIn =
@@ -190,6 +191,8 @@ export const conversationRelayRouter = (app: FastifyInstance) => {
             session.callSid = message.type === "setup" ? message.callSid : null;
             session.toNumber = message.to ?? null;
             session.forwardedFrom = message.forwardedFrom ?? null;
+            // A caller with a profile is greeted by name and not asked for it.
+            adoptCustomer(session, await customerFromCallerId(message.from).catch(() => null));
             request.log.info(
               {
                 event: "salon_resolved",
